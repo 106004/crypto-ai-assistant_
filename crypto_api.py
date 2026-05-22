@@ -7,21 +7,29 @@ import requests
 # 我們這裡先用它的 simple price endpoint 取得幣價和 24 小時漲跌。
 COINGECKO_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
 
+# Binance Spot API 也有免費公開的市場資料 endpoint。
+# 這裡把它當作「備用 API」：
+# 1. 平常先查 CoinGecko，維持原本功能。
+# 2. 如果 CoinGecko 暫時失敗、限流或資料不完整，再改查 Binance。
+# 3. Binance 的 /api/v3/ticker/24hr 可以拿到 lastPrice 和 priceChangePercent，
+#    剛好能組成原本 line_bot.py 需要的價格和 24 小時漲跌資料。
+BINANCE_TICKER_24HR_URL = "https://api.binance.com/api/v3/ticker/24hr"
+
 
 # 使用者通常會輸入 btc、eth 這種交易所常見代號。
 # 但 CoinGecko API 需要的是 coin id，例如 bitcoin、ethereum。
 # 所以這裡建立一張轉換表，讓使用者可以用簡短代號查詢。
 SUPPORTED_COINS = {
-    "btc": {"id": "bitcoin", "name": "Bitcoin", "symbol": "BTC"},
-    "eth": {"id": "ethereum", "name": "Ethereum", "symbol": "ETH"},
-    "sol": {"id": "solana", "name": "Solana", "symbol": "SOL"},
-    "bnb": {"id": "binancecoin", "name": "BNB", "symbol": "BNB"},
-    "xrp": {"id": "ripple", "name": "XRP", "symbol": "XRP"},
-    "doge": {"id": "dogecoin", "name": "Dogecoin", "symbol": "DOGE"},
-    "ada": {"id": "cardano", "name": "Cardano", "symbol": "ADA"},
-    "ton": {"id": "the-open-network", "name": "Toncoin", "symbol": "TON"},
-    "trx": {"id": "tron", "name": "TRON", "symbol": "TRX"},
-    "avax": {"id": "avalanche-2", "name": "Avalanche", "symbol": "AVAX"},
+    "btc": {"id": "bitcoin", "name": "Bitcoin", "symbol": "BTC", "binance_symbol": "BTCUSDT"},
+    "eth": {"id": "ethereum", "name": "Ethereum", "symbol": "ETH", "binance_symbol": "ETHUSDT"},
+    "sol": {"id": "solana", "name": "Solana", "symbol": "SOL", "binance_symbol": "SOLUSDT"},
+    "bnb": {"id": "binancecoin", "name": "BNB", "symbol": "BNB", "binance_symbol": "BNBUSDT"},
+    "xrp": {"id": "ripple", "name": "XRP", "symbol": "XRP", "binance_symbol": "XRPUSDT"},
+    "doge": {"id": "dogecoin", "name": "Dogecoin", "symbol": "DOGE", "binance_symbol": "DOGEUSDT"},
+    "ada": {"id": "cardano", "name": "Cardano", "symbol": "ADA", "binance_symbol": "ADAUSDT"},
+    "ton": {"id": "the-open-network", "name": "Toncoin", "symbol": "TON", "binance_symbol": "TONUSDT"},
+    "trx": {"id": "tron", "name": "TRON", "symbol": "TRX", "binance_symbol": "TRXUSDT"},
+    "avax": {"id": "avalanche-2", "name": "Avalanche", "symbol": "AVAX", "binance_symbol": "AVAXUSDT"},
 }
 
 
@@ -47,6 +55,71 @@ SUPPORTED_COINS = {
 #     }
 # }
 price_cache = {}
+
+
+def _build_price_result(coin, price_usd, change_24h):
+    """把不同 API 回傳的資料整理成同一種格式，避免其他檔案需要改。"""
+
+    return {
+        "name": coin["name"],
+        "symbol": coin["symbol"],
+        "price_usd": price_usd,
+        "change_24h": change_24h,
+    }
+
+
+def _save_price_cache(normalized_symbol, result, timestamp):
+    """把成功查到的幣價寫進 cache；錯誤提示文字不寫入 cache。"""
+
+    if result is None or isinstance(result, str):
+        return
+
+    price_cache[normalized_symbol] = {
+        "data": result,
+        "timestamp": timestamp,
+    }
+
+
+def _get_coin_price_from_binance(coin):
+    """使用 Binance 免費公開 API 當作備用來源查詢幣價。"""
+
+    print("改用備用 Binance API 查詢：")
+    print(coin["symbol"])
+
+    # Binance 查幣價時使用交易對 symbol。
+    # 例如 BTC 的美元穩定幣交易對是 BTCUSDT，
+    # 這裡用 USDT 價格近似 USD 價格，對一般查價機器人已經足夠。
+    params = {
+        "symbol": coin["binance_symbol"],
+    }
+
+    try:
+        response = requests.get(BINANCE_TICKER_24HR_URL, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+    except requests.HTTPError as error:
+        if error.response is not None and error.response.status_code == 429:
+            return "目前查詢人數較多，\n請稍後再試。"
+
+        print(f"查詢 Binance 備用 API 失敗：{error}")
+        return None
+    except requests.RequestException as error:
+        print(f"查詢 Binance 備用 API 失敗，可能是網路或 API 暫時有問題：{error}")
+        return None
+    except ValueError as error:
+        print(f"Binance 備用 API 回傳的內容不是合法 JSON：{error}")
+        return None
+
+    # Binance /api/v3/ticker/24hr 回傳格式大概會像：
+    # {"symbol": "BTCUSDT", "lastPrice": "105000.00", "priceChangePercent": "2.3"}
+    price_usd = data.get("lastPrice")
+    change_24h = data.get("priceChangePercent")
+
+    if price_usd is None or change_24h is None:
+        print(f"Binance 備用 API 回傳資料不完整，缺少價格或 24 小時漲跌：{data}")
+        return None
+
+    return _build_price_result(coin, price_usd, change_24h)
 
 
 def get_coin_price(symbol):
@@ -103,23 +176,37 @@ def get_coin_price(symbol):
         # 這不是程式壞掉，而是免費 API 為了保護服務穩定性做的限制。
         # 所以這裡回傳友善文字，讓呼叫端可以直接提示使用者稍後再試。
         if error.response is not None and error.response.status_code == 429:
+            print("CoinGecko API 目前限流，改查備用 API。")
+            backup_result = _get_coin_price_from_binance(coin)
+            if backup_result is not None:
+                _save_price_cache(normalized_symbol, backup_result, now)
+                return backup_result
+
             return "目前查詢人數較多，\n請稍後再試。"
 
         print(f"查詢 CoinGecko API 失敗，可能是網路或 API 暫時有問題：{error}")
-        return None
+        backup_result = _get_coin_price_from_binance(coin)
+        _save_price_cache(normalized_symbol, backup_result, now)
+        return backup_result
     except requests.RequestException as error:
         print(f"查詢 CoinGecko API 失敗，可能是網路或 API 暫時有問題：{error}")
-        return None
+        backup_result = _get_coin_price_from_binance(coin)
+        _save_price_cache(normalized_symbol, backup_result, now)
+        return backup_result
     except ValueError as error:
         print(f"CoinGecko API 回傳的內容不是合法 JSON：{error}")
-        return None
+        backup_result = _get_coin_price_from_binance(coin)
+        _save_price_cache(normalized_symbol, backup_result, now)
+        return backup_result
 
     # CoinGecko 回傳格式大概會像：
     # {"bitcoin": {"usd": 105000, "usd_24h_change": 2.3}}
     coin_data = data.get(coin["id"])
     if not coin_data:
         print(f"CoinGecko 沒有回傳 {coin['id']} 的市場資料。")
-        return None
+        backup_result = _get_coin_price_from_binance(coin)
+        _save_price_cache(normalized_symbol, backup_result, now)
+        return backup_result
 
     price_usd = coin_data.get("usd")
     change_24h = coin_data.get("usd_24h_change")
@@ -127,21 +214,15 @@ def get_coin_price(symbol):
     # 如果少了必要欄位，就不要硬組結果，避免給使用者錯誤資訊。
     if price_usd is None or change_24h is None:
         print(f"CoinGecko 回傳資料不完整，缺少價格或 24 小時漲跌：{coin_data}")
-        return None
+        backup_result = _get_coin_price_from_binance(coin)
+        _save_price_cache(normalized_symbol, backup_result, now)
+        return backup_result
 
     # 回傳整理好的資料，讓 line_bot.py 可以專心負責排版和回覆。
-    result = {
-        "name": coin["name"],
-        "symbol": coin["symbol"],
-        "price_usd": price_usd,
-        "change_24h": change_24h,
-    }
+    result = _build_price_result(coin, price_usd, change_24h)
 
     # API 查詢成功後，把結果放進 cache。
     # 下一次同一個幣種在 60 秒內被查詢時，就可以直接回傳這份 result。
-    price_cache[normalized_symbol] = {
-        "data": result,
-        "timestamp": now,
-    }
+    _save_price_cache(normalized_symbol, result, now)
 
     return result
