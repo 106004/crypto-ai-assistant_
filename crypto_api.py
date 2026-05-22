@@ -7,31 +7,41 @@ import requests
 # 我們這裡先用它的 simple price endpoint 取得幣價和 24 小時漲跌。
 COINGECKO_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
 
-# Binance Spot API 也有免費公開的市場資料 endpoint。
+# CoinCap API 也有免費公開的市場資料 endpoint。
 # 這裡把它當作「備用 API」：
 # 1. 平常先查 CoinGecko，維持原本功能。
-# 2. 如果 CoinGecko 暫時失敗、限流或資料不完整，再改查 Binance。
-# 3. Binance 的 /api/v3/ticker/24hr 可以拿到 lastPrice 和 priceChangePercent，
+# 2. 如果 CoinGecko 暫時失敗、限流或資料不完整，再改查 CoinCap。
+# 3. CoinCap 的 /v2/assets/{id} 可以拿到 priceUsd 和 changePercent24Hr，
 #    剛好能組成原本 line_bot.py 需要的價格和 24 小時漲跌資料。
-BINANCE_TICKER_24HR_URL = "https://api.binance.com/api/v3/ticker/24hr"
-BACKUP_API_NAME = "Binance"
-ALL_MARKET_DATA_BUSY_MESSAGE = "目前所有市場資料來源都暫時忙碌，請稍後再試。"
+COINCAP_ASSET_URL = "https://api.coincap.io/v2/assets/{asset_id}"
+BACKUP_API_NAME = "CoinCap"
+ALL_MARKET_DATA_BUSY_MESSAGE = "目前所有市場資料來源都忙碌中，\n請稍後再試。"
 
 
 # 使用者通常會輸入 btc、eth 這種交易所常見代號。
 # 但 CoinGecko API 需要的是 coin id，例如 bitcoin、ethereum。
 # 所以這裡建立一張轉換表，讓使用者可以用簡短代號查詢。
 SUPPORTED_COINS = {
-    "btc": {"id": "bitcoin", "name": "Bitcoin", "symbol": "BTC", "binance_symbol": "BTCUSDT"},
-    "eth": {"id": "ethereum", "name": "Ethereum", "symbol": "ETH", "binance_symbol": "ETHUSDT"},
-    "sol": {"id": "solana", "name": "Solana", "symbol": "SOL", "binance_symbol": "SOLUSDT"},
-    "bnb": {"id": "binancecoin", "name": "BNB", "symbol": "BNB", "binance_symbol": "BNBUSDT"},
-    "xrp": {"id": "ripple", "name": "XRP", "symbol": "XRP", "binance_symbol": "XRPUSDT"},
-    "doge": {"id": "dogecoin", "name": "Dogecoin", "symbol": "DOGE", "binance_symbol": "DOGEUSDT"},
-    "ada": {"id": "cardano", "name": "Cardano", "symbol": "ADA", "binance_symbol": "ADAUSDT"},
-    "ton": {"id": "the-open-network", "name": "Toncoin", "symbol": "TON", "binance_symbol": "TONUSDT"},
-    "trx": {"id": "tron", "name": "TRON", "symbol": "TRX", "binance_symbol": "TRXUSDT"},
-    "avax": {"id": "avalanche-2", "name": "Avalanche", "symbol": "AVAX", "binance_symbol": "AVAXUSDT"},
+    "btc": {"id": "bitcoin", "name": "Bitcoin", "symbol": "BTC"},
+    "eth": {"id": "ethereum", "name": "Ethereum", "symbol": "ETH"},
+    "sol": {"id": "solana", "name": "Solana", "symbol": "SOL"},
+    "bnb": {"id": "binancecoin", "name": "BNB", "symbol": "BNB"},
+    "xrp": {"id": "ripple", "name": "XRP", "symbol": "XRP"},
+    "doge": {"id": "dogecoin", "name": "Dogecoin", "symbol": "DOGE"},
+    "ada": {"id": "cardano", "name": "Cardano", "symbol": "ADA"},
+    "ton": {"id": "the-open-network", "name": "Toncoin", "symbol": "TON"},
+    "trx": {"id": "tron", "name": "TRON", "symbol": "TRX"},
+    "avax": {"id": "avalanche-2", "name": "Avalanche", "symbol": "AVAX"},
+}
+
+
+# CoinCap 的 asset id 和使用者輸入的代號不一定完全一樣。
+# 例如使用者輸入 btc，但 CoinCap URL 要用 bitcoin。
+# 先用明確表格管理轉換，debug 時也比較容易檢查是否打到正確 endpoint。
+COINCAP_ASSET_IDS = {
+    "btc": "bitcoin",
+    "eth": "ethereum",
+    "sol": "solana",
 }
 
 
@@ -109,6 +119,8 @@ def _get_coin_price_from_coingecko(coin):
         # timeout=10 是為了避免外部 API 卡住時，整個 webhook 也跟著卡太久。
         response = requests.get(COINGECKO_PRICE_URL, params=params, timeout=10)
         print(f"[CryptoAPI] CoinGecko 狀態碼：{response.status_code}")
+        if response.status_code == 429:
+            print("[CryptoAPI] CoinGecko 限流")
 
         # 如果 CoinGecko 回傳 4xx 或 5xx，這行會丟出例外。
         # 429 Too Many Requests 代表主 API 限流；外層一定會切換備用 API。
@@ -146,45 +158,54 @@ def _get_coin_price_from_coingecko(coin):
     return _build_price_result("CoinGecko", coin, price_usd, change_24h)
 
 
-def _get_coin_price_from_binance(coin):
-    """使用 Binance 免費公開 API 當作備用來源查詢幣價。"""
+def _get_coin_price_from_coincap(normalized_symbol):
+    """使用 CoinCap 免費公開 API 當作備用來源查詢幣價。"""
 
-    print(f"[CryptoAPI] 開始切換備用 API：{BACKUP_API_NAME}")
+    print("[CryptoAPI] 切換 CoinCap API")
 
-    # Binance 查幣價時使用交易對 symbol。
-    # 例如 BTC 的美元穩定幣交易對是 BTCUSDT，
-    # 這裡用 USDT 價格近似 USD 價格，對一般查價機器人已經足夠。
-    params = {
-        "symbol": coin["binance_symbol"],
-    }
+    asset_id = COINCAP_ASSET_IDS.get(normalized_symbol)
+    if asset_id is None:
+        print(f"[CryptoAPI] CoinCap API 失敗：沒有 {normalized_symbol.upper()} 的 CoinCap asset id 對照")
+        return None
+
+    print(f"[CryptoAPI] CoinCap symbol 對照：{normalized_symbol} -> {asset_id}")
+    url = COINCAP_ASSET_URL.format(asset_id=asset_id)
 
     try:
-        response = requests.get(BINANCE_TICKER_24HR_URL, params=params, timeout=10)
-        print(f"[CryptoAPI] 備用 API 狀態碼：{response.status_code}")
+        response = requests.get(url, timeout=10)
+        print(f"[CryptoAPI] CoinCap 狀態碼：{response.status_code}")
         response.raise_for_status()
-        data = response.json()
+        payload = response.json()
     except requests.HTTPError as error:
-        print(f"[CryptoAPI] 備用 API 失敗：HTTP 錯誤：{error}")
+        print(f"[CryptoAPI] CoinCap API 失敗：HTTP 錯誤：{error}")
         return None
     except requests.RequestException as error:
-        print("[CryptoAPI] 備用 API 狀態碼：無回應")
-        print(f"[CryptoAPI] 備用 API 失敗：網路或 API 暫時有問題：{error}")
+        print("[CryptoAPI] CoinCap 狀態碼：無回應")
+        print(f"[CryptoAPI] CoinCap API 失敗：網路或 API 暫時有問題：{error}")
         return None
     except ValueError as error:
-        print(f"[CryptoAPI] 備用 API 失敗：回傳內容不是合法 JSON：{error}")
+        print(f"[CryptoAPI] CoinCap API 失敗：回傳內容不是合法 JSON：{error}")
         return None
 
-    # Binance /api/v3/ticker/24hr 回傳格式大概會像：
-    # {"symbol": "BTCUSDT", "lastPrice": "105000.00", "priceChangePercent": "2.3"}
-    price_usd = data.get("lastPrice")
-    change_24h = data.get("priceChangePercent")
+    # CoinCap /v2/assets/{id} 回傳格式大概會像：
+    # {"data": {"id": "bitcoin", "name": "Bitcoin", "symbol": "BTC",
+    #           "priceUsd": "105000.00", "changePercent24Hr": "2.3"}}
+    data = payload.get("data", {})
+    price_usd = data.get("priceUsd")
+    change_24h = data.get("changePercent24Hr")
 
     if price_usd is None or change_24h is None:
-        print(f"[CryptoAPI] 備用 API 失敗：資料不完整，缺少價格或 24 小時漲跌：{data}")
+        print(f"[CryptoAPI] CoinCap API 失敗：資料不完整，缺少價格或 24 小時漲跌：{payload}")
         return None
 
-    print("[CryptoAPI] 備用 API 成功")
-    return _build_price_result(BACKUP_API_NAME, coin, price_usd, change_24h)
+    print("[CryptoAPI] CoinCap API 成功")
+    return {
+        "source": BACKUP_API_NAME,
+        "name": data.get("name", asset_id.title()),
+        "symbol": data.get("symbol", normalized_symbol.upper()),
+        "price_usd": price_usd,
+        "change_24h": change_24h,
+    }
 
 
 def get_coin_price(symbol):
@@ -221,7 +242,7 @@ def get_coin_price(symbol):
         _print_final_source("CoinGecko")
         return result
 
-    backup_result = _get_coin_price_from_binance(coin)
+    backup_result = _get_coin_price_from_coincap(normalized_symbol)
     if backup_result is not None:
         _save_price_cache(normalized_symbol, backup_result, now)
         _print_final_source(BACKUP_API_NAME)
