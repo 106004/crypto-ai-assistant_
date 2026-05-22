@@ -194,6 +194,10 @@ def _handle_coin_price(reply_token, user_text):
         reply_message(reply_token, "暫時查不到幣價，可能是 CoinGecko API 或網路連線有問題，請稍後再試。")
         return
 
+    if isinstance(coin_data, str):
+        reply_message(reply_token, coin_data)
+        return
+
     reply_message(reply_token, _format_coin_message(coin_data))
 
 

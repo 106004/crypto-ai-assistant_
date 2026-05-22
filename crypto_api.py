@@ -1,3 +1,5 @@
+import time
+
 import requests
 
 
@@ -23,6 +25,30 @@ SUPPORTED_COINS = {
 }
 
 
+# price_cache 是一個很簡單的記憶體快取。
+# 白話來說，就是程式先把剛查到的幣價暫存在這個 dict 裡。
+# 如果短時間內又有人查同一個幣種，就可以直接拿剛剛查過的結果，
+# 不需要每次都真的打到 CoinGecko API。
+#
+# 免費 API 通常都會有限流，因為服務商的伺服器、資料庫、頻寬都有成本。
+# 如果每個使用者、每個機器人都無限制一直查詢，免費服務很快就會被打爆，
+# 所以 CoinGecko 這類 API 會用 429 Too Many Requests 來提醒我們「查太多次了」。
+#
+# 大型 AI 系統也很依賴 cache。
+# 原因很直接：AI 回答、API 查詢、資料庫查詢通常都很花時間也很花錢。
+# 把短時間內重複使用的結果快取起來，可以降低成本、減少等待時間，
+# 也能避免外部 API 被重複請求壓垮。
+#
+# 格式範例：
+# {
+#     "btc": {
+#         "data": {...},
+#         "timestamp": 1710000000
+#     }
+# }
+price_cache = {}
+
+
 def get_coin_price(symbol):
     """使用 CoinGecko 免費 API 查詢指定幣種的美元價格。"""
 
@@ -36,6 +62,20 @@ def get_coin_price(symbol):
     if coin is None:
         print(f"目前不支援這個幣種：{symbol}")
         return None
+
+    now = time.time()
+    cached_price = price_cache.get(normalized_symbol)
+
+    # cache 的用途是擋掉「短時間內重複查同一筆資料」。
+    # 幣價每秒都可能變動，但對一般 LINE Bot 查詢來說，
+    # 60 秒內重複使用同一筆資料通常已經足夠，也能大幅減少 API 呼叫次數。
+    if cached_price and now - cached_price["timestamp"] < 60:
+        print("使用快取資料：")
+        print(coin["symbol"])
+        return cached_price["data"]
+
+    print("重新查詢 CoinGecko API：")
+    print(coin["symbol"])
 
     # CoinGecko simple price API 的參數。
     # ids 使用 CoinGecko 的 coin id。
@@ -58,6 +98,15 @@ def get_coin_price(symbol):
 
         # 把 API 回傳的 JSON 轉成 Python dict。
         data = response.json()
+    except requests.HTTPError as error:
+        # 429 Too Many Requests 代表短時間內查太多次，被 CoinGecko 限流。
+        # 這不是程式壞掉，而是免費 API 為了保護服務穩定性做的限制。
+        # 所以這裡回傳友善文字，讓呼叫端可以直接提示使用者稍後再試。
+        if error.response is not None and error.response.status_code == 429:
+            return "目前查詢人數較多，\n請稍後再試。"
+
+        print(f"查詢 CoinGecko API 失敗，可能是網路或 API 暫時有問題：{error}")
+        return None
     except requests.RequestException as error:
         print(f"查詢 CoinGecko API 失敗，可能是網路或 API 暫時有問題：{error}")
         return None
@@ -81,9 +130,18 @@ def get_coin_price(symbol):
         return None
 
     # 回傳整理好的資料，讓 line_bot.py 可以專心負責排版和回覆。
-    return {
+    result = {
         "name": coin["name"],
         "symbol": coin["symbol"],
         "price_usd": price_usd,
         "change_24h": change_24h,
     }
+
+    # API 查詢成功後，把結果放進 cache。
+    # 下一次同一個幣種在 60 秒內被查詢時，就可以直接回傳這份 result。
+    price_cache[normalized_symbol] = {
+        "data": result,
+        "timestamp": now,
+    }
+
+    return result

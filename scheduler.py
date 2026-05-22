@@ -87,6 +87,10 @@ def send_hourly_favorite_coin_price():
             print(f"CoinGecko 暫時查不到 {favorite_coin.upper()} 價格，已略過 {user_id}。")
             continue
 
+        if isinstance(coin_data, str):
+            print(f"CoinGecko 暫時限流，已略過 {user_id}：{coin_data}")
+            continue
+
         message = _format_hourly_coin_price_message(coin_data)
         push_message(user_id, message)
 
