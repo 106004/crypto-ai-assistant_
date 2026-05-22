@@ -73,12 +73,13 @@ def _format_coin_message(coin_data):
     change_24h = float(coin_data["change_24h"])
     change_text = f"{change_24h:+.2f}%"
     price_text = f"{float(coin_data['price_usd']):,.2f}"
+    source = coin_data.get("source", "CoinGecko")
 
     return (
         f"{coin_data['name']} 價格資訊\n\n"
         f"目前價格：{price_text} USD\n"
         f"24H 漲跌：{change_text}\n\n"
-        "資料來源：CoinGecko"
+        f"資料來源：{source}"
     )
 
 

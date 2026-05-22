@@ -14,6 +14,8 @@ COINGECKO_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
 # 3. Binance 的 /api/v3/ticker/24hr 可以拿到 lastPrice 和 priceChangePercent，
 #    剛好能組成原本 line_bot.py 需要的價格和 24 小時漲跌資料。
 BINANCE_TICKER_24HR_URL = "https://api.binance.com/api/v3/ticker/24hr"
+BACKUP_API_NAME = "Binance"
+ALL_MARKET_DATA_BUSY_MESSAGE = "目前所有市場資料來源都暫時忙碌，請稍後再試。"
 
 
 # 使用者通常會輸入 btc、eth 這種交易所常見代號。
@@ -57,15 +59,22 @@ SUPPORTED_COINS = {
 price_cache = {}
 
 
-def _build_price_result(coin, price_usd, change_24h):
+def _build_price_result(source, coin, price_usd, change_24h):
     """把不同 API 回傳的資料整理成同一種格式，避免其他檔案需要改。"""
 
     return {
+        "source": source,
         "name": coin["name"],
         "symbol": coin["symbol"],
         "price_usd": price_usd,
         "change_24h": change_24h,
     }
+
+
+def _print_final_source(source):
+    """集中印出最後資料來源，方便 debug 時一眼看懂這次查詢結果。"""
+
+    print(f"[CryptoAPI] 最終資料來源：{source}")
 
 
 def _save_price_cache(normalized_symbol, result, timestamp):
@@ -80,75 +89,10 @@ def _save_price_cache(normalized_symbol, result, timestamp):
     }
 
 
-def _get_coin_price_from_binance(coin):
-    """使用 Binance 免費公開 API 當作備用來源查詢幣價。"""
+def _get_coin_price_from_coingecko(coin):
+    """使用 CoinGecko 主 API 查詢幣價；失敗時回傳 None，讓外層切換備用 API。"""
 
-    print("改用備用 Binance API 查詢：")
-    print(coin["symbol"])
-
-    # Binance 查幣價時使用交易對 symbol。
-    # 例如 BTC 的美元穩定幣交易對是 BTCUSDT，
-    # 這裡用 USDT 價格近似 USD 價格，對一般查價機器人已經足夠。
-    params = {
-        "symbol": coin["binance_symbol"],
-    }
-
-    try:
-        response = requests.get(BINANCE_TICKER_24HR_URL, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-    except requests.HTTPError as error:
-        if error.response is not None and error.response.status_code == 429:
-            return "目前查詢人數較多，\n請稍後再試。"
-
-        print(f"查詢 Binance 備用 API 失敗：{error}")
-        return None
-    except requests.RequestException as error:
-        print(f"查詢 Binance 備用 API 失敗，可能是網路或 API 暫時有問題：{error}")
-        return None
-    except ValueError as error:
-        print(f"Binance 備用 API 回傳的內容不是合法 JSON：{error}")
-        return None
-
-    # Binance /api/v3/ticker/24hr 回傳格式大概會像：
-    # {"symbol": "BTCUSDT", "lastPrice": "105000.00", "priceChangePercent": "2.3"}
-    price_usd = data.get("lastPrice")
-    change_24h = data.get("priceChangePercent")
-
-    if price_usd is None or change_24h is None:
-        print(f"Binance 備用 API 回傳資料不完整，缺少價格或 24 小時漲跌：{data}")
-        return None
-
-    return _build_price_result(coin, price_usd, change_24h)
-
-
-def get_coin_price(symbol):
-    """使用 CoinGecko 免費 API 查詢指定幣種的美元價格。"""
-
-    # symbol 是使用者輸入的幣種代號，例如 btc、eth、sol。
-    # 先轉成小寫並去掉前後空白，讓 BTC、 btc 這類輸入也能正常查。
-    normalized_symbol = str(symbol).strip().lower()
-
-    # 檢查這個幣種是否在我們支援的清單裡。
-    # 如果不支援，就回傳 None，讓呼叫端決定要怎麼提示使用者。
-    coin = SUPPORTED_COINS.get(normalized_symbol)
-    if coin is None:
-        print(f"目前不支援這個幣種：{symbol}")
-        return None
-
-    now = time.time()
-    cached_price = price_cache.get(normalized_symbol)
-
-    # cache 的用途是擋掉「短時間內重複查同一筆資料」。
-    # 幣價每秒都可能變動，但對一般 LINE Bot 查詢來說，
-    # 60 秒內重複使用同一筆資料通常已經足夠，也能大幅減少 API 呼叫次數。
-    if cached_price and now - cached_price["timestamp"] < 60:
-        print("使用快取資料：")
-        print(coin["symbol"])
-        return cached_price["data"]
-
-    print("重新查詢 CoinGecko API：")
-    print(coin["symbol"])
+    print("[CryptoAPI] 嘗試主 API：CoinGecko")
 
     # CoinGecko simple price API 的參數。
     # ids 使用 CoinGecko 的 coin id。
@@ -164,65 +108,125 @@ def get_coin_price(symbol):
         # 對 CoinGecko 發出 HTTP GET request。
         # timeout=10 是為了避免外部 API 卡住時，整個 webhook 也跟著卡太久。
         response = requests.get(COINGECKO_PRICE_URL, params=params, timeout=10)
+        print(f"[CryptoAPI] CoinGecko 狀態碼：{response.status_code}")
 
         # 如果 CoinGecko 回傳 4xx 或 5xx，這行會丟出例外。
-        # 我們在 except 裡用白話印出錯誤，不讓程式崩潰。
+        # 429 Too Many Requests 代表主 API 限流；外層一定會切換備用 API。
         response.raise_for_status()
 
         # 把 API 回傳的 JSON 轉成 Python dict。
         data = response.json()
     except requests.HTTPError as error:
-        # 429 Too Many Requests 代表短時間內查太多次，被 CoinGecko 限流。
-        # 這不是程式壞掉，而是免費 API 為了保護服務穩定性做的限制。
-        # 所以這裡回傳友善文字，讓呼叫端可以直接提示使用者稍後再試。
-        if error.response is not None and error.response.status_code == 429:
-            print("CoinGecko API 目前限流，改查備用 API。")
-            backup_result = _get_coin_price_from_binance(coin)
-            if backup_result is not None:
-                _save_price_cache(normalized_symbol, backup_result, now)
-                return backup_result
-
-            return "目前查詢人數較多，\n請稍後再試。"
-
-        print(f"查詢 CoinGecko API 失敗，可能是網路或 API 暫時有問題：{error}")
-        backup_result = _get_coin_price_from_binance(coin)
-        _save_price_cache(normalized_symbol, backup_result, now)
-        return backup_result
+        print(f"[CryptoAPI] CoinGecko 失敗原因：HTTP 錯誤：{error}")
+        return None
     except requests.RequestException as error:
-        print(f"查詢 CoinGecko API 失敗，可能是網路或 API 暫時有問題：{error}")
-        backup_result = _get_coin_price_from_binance(coin)
-        _save_price_cache(normalized_symbol, backup_result, now)
-        return backup_result
+        print("[CryptoAPI] CoinGecko 狀態碼：無回應")
+        print(f"[CryptoAPI] CoinGecko 失敗原因：網路或 API 暫時有問題：{error}")
+        return None
     except ValueError as error:
-        print(f"CoinGecko API 回傳的內容不是合法 JSON：{error}")
-        backup_result = _get_coin_price_from_binance(coin)
-        _save_price_cache(normalized_symbol, backup_result, now)
-        return backup_result
+        print("[CryptoAPI] CoinGecko 失敗原因：回傳內容不是合法 JSON")
+        print(f"[CryptoAPI] CoinGecko JSON 錯誤：{error}")
+        return None
 
     # CoinGecko 回傳格式大概會像：
     # {"bitcoin": {"usd": 105000, "usd_24h_change": 2.3}}
     coin_data = data.get(coin["id"])
     if not coin_data:
-        print(f"CoinGecko 沒有回傳 {coin['id']} 的市場資料。")
-        backup_result = _get_coin_price_from_binance(coin)
-        _save_price_cache(normalized_symbol, backup_result, now)
-        return backup_result
+        print(f"[CryptoAPI] CoinGecko 失敗原因：沒有回傳 {coin['id']} 的市場資料")
+        return None
 
     price_usd = coin_data.get("usd")
     change_24h = coin_data.get("usd_24h_change")
 
     # 如果少了必要欄位，就不要硬組結果，避免給使用者錯誤資訊。
     if price_usd is None or change_24h is None:
-        print(f"CoinGecko 回傳資料不完整，缺少價格或 24 小時漲跌：{coin_data}")
-        backup_result = _get_coin_price_from_binance(coin)
+        print(f"[CryptoAPI] CoinGecko 失敗原因：資料不完整，缺少價格或 24 小時漲跌：{coin_data}")
+        return None
+
+    return _build_price_result("CoinGecko", coin, price_usd, change_24h)
+
+
+def _get_coin_price_from_binance(coin):
+    """使用 Binance 免費公開 API 當作備用來源查詢幣價。"""
+
+    print(f"[CryptoAPI] 開始切換備用 API：{BACKUP_API_NAME}")
+
+    # Binance 查幣價時使用交易對 symbol。
+    # 例如 BTC 的美元穩定幣交易對是 BTCUSDT，
+    # 這裡用 USDT 價格近似 USD 價格，對一般查價機器人已經足夠。
+    params = {
+        "symbol": coin["binance_symbol"],
+    }
+
+    try:
+        response = requests.get(BINANCE_TICKER_24HR_URL, params=params, timeout=10)
+        print(f"[CryptoAPI] 備用 API 狀態碼：{response.status_code}")
+        response.raise_for_status()
+        data = response.json()
+    except requests.HTTPError as error:
+        print(f"[CryptoAPI] 備用 API 失敗：HTTP 錯誤：{error}")
+        return None
+    except requests.RequestException as error:
+        print("[CryptoAPI] 備用 API 狀態碼：無回應")
+        print(f"[CryptoAPI] 備用 API 失敗：網路或 API 暫時有問題：{error}")
+        return None
+    except ValueError as error:
+        print(f"[CryptoAPI] 備用 API 失敗：回傳內容不是合法 JSON：{error}")
+        return None
+
+    # Binance /api/v3/ticker/24hr 回傳格式大概會像：
+    # {"symbol": "BTCUSDT", "lastPrice": "105000.00", "priceChangePercent": "2.3"}
+    price_usd = data.get("lastPrice")
+    change_24h = data.get("priceChangePercent")
+
+    if price_usd is None or change_24h is None:
+        print(f"[CryptoAPI] 備用 API 失敗：資料不完整，缺少價格或 24 小時漲跌：{data}")
+        return None
+
+    print("[CryptoAPI] 備用 API 成功")
+    return _build_price_result(BACKUP_API_NAME, coin, price_usd, change_24h)
+
+
+def get_coin_price(symbol):
+    """使用 CoinGecko 免費 API 查詢指定幣種的美元價格。"""
+
+    # symbol 是使用者輸入的幣種代號，例如 btc、eth、sol。
+    # 先轉成小寫並去掉前後空白，讓 BTC、 btc 這類輸入也能正常查。
+    normalized_symbol = str(symbol).strip().lower()
+    print(f"[CryptoAPI] 使用者查詢：{normalized_symbol.upper()}")
+
+    # 檢查這個幣種是否在我們支援的清單裡。
+    # 如果不支援，就回傳 None，讓呼叫端決定要怎麼提示使用者。
+    coin = SUPPORTED_COINS.get(normalized_symbol)
+    if coin is None:
+        print(f"目前不支援這個幣種：{symbol}")
+        return None
+
+    now = time.time()
+    cached_price = price_cache.get(normalized_symbol)
+
+    # cache 的用途是擋掉「短時間內重複查同一筆資料」。
+    # 幣價每秒都可能變動，但對一般 LINE Bot 查詢來說，
+    # 60 秒內重複使用同一筆資料通常已經足夠，也能大幅減少 API 呼叫次數。
+    if cached_price and now - cached_price["timestamp"] < 60:
+        source = cached_price["data"].get("source", "未知")
+        print(f"[CryptoAPI] 使用快取資料：{coin['symbol']}")
+        print(f"[CryptoAPI] 快取資料來源：{source}")
+        _print_final_source("cache")
+        return cached_price["data"]
+
+    result = _get_coin_price_from_coingecko(coin)
+    if result is not None:
+        _save_price_cache(normalized_symbol, result, now)
+        _print_final_source("CoinGecko")
+        return result
+
+    backup_result = _get_coin_price_from_binance(coin)
+    if backup_result is not None:
         _save_price_cache(normalized_symbol, backup_result, now)
+        _print_final_source(BACKUP_API_NAME)
         return backup_result
 
-    # 回傳整理好的資料，讓 line_bot.py 可以專心負責排版和回覆。
-    result = _build_price_result(coin, price_usd, change_24h)
-
-    # API 查詢成功後，把結果放進 cache。
-    # 下一次同一個幣種在 60 秒內被查詢時，就可以直接回傳這份 result。
-    _save_price_cache(normalized_symbol, result, now)
-
-    return result
+    print("[CryptoAPI] 備用 API 失敗")
+    _print_final_source("全部失敗")
+    return ALL_MARKET_DATA_BUSY_MESSAGE
