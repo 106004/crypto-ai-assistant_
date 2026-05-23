@@ -3,7 +3,7 @@ import json
 import requests
 
 from config import LINE_CHANNEL_ACCESS_TOKEN
-from crypto_api import SUPPORTED_COINS, get_coin_from_local_data, get_coin_price
+from crypto_api import SUPPORTED_COINS, get_coin_from_local_data, get_coin_from_supabase, get_coin_price
 from user_manager import get_user, mark_user_onboarded, save_user, update_favorite_coin
 
 
@@ -74,7 +74,7 @@ def _format_coin_message(coin_data):
     change_text = f"{change_24h:+.2f}%"
     price_text = f"{float(coin_data['price_usd']):,.2f}"
     source = coin_data.get("source", "即時 API")
-    if source != "本地 market_data.json":
+    if source not in ("Supabase", "本地 market_data.json"):
         source = "即時 API"
     updated_at = coin_data.get("updated_at", "未知")
 
@@ -192,9 +192,10 @@ def _handle_mycoin(user_id, reply_token):
 def _handle_coin_price(reply_token, user_text):
     """處理 10 種支援幣的查價指令。"""
 
-    # 先讀本地 market_data.json，讓 10 種支援幣查價更快，也減少外部 API 呼叫次數。
-    # 如果本地檔案沒有資料，再退回原本的即時 API 查詢流程。
-    coin_data = get_coin_from_local_data(user_text)
+    # 查價優先序：Supabase market_data -> local JSON -> realtime API.
+    coin_data = get_coin_from_supabase(user_text)
+    if coin_data is None:
+        coin_data = get_coin_from_local_data(user_text)
     if coin_data is None:
         coin_data = get_coin_price(user_text)
 

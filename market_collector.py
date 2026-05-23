@@ -24,9 +24,7 @@ TRACKED_COINS = {
 }
 
 
-def save_market_data(data):
-    """把整理好的市場資料寫入 data/market_data.json。"""
-
+def _save_market_data_to_json(data):
     try:
         MARKET_DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
         with MARKET_DATA_FILE.open("w", encoding="utf-8") as file:
@@ -35,16 +33,32 @@ def save_market_data(data):
         print(f"[MarketCollector] 已寫入 {MARKET_DATA_FILE}")
     except OSError as error:
         print(f"[MarketCollector] 寫入 market_data.json 失敗：{error}")
-        return
+        return False
+
+    return True
+
+
+def save_market_data(data):
+    """把整理好的市場資料優先寫入 Supabase，失敗時才寫入 JSON。"""
 
     try:
         from database_manager import upsert_market_data
     except Exception as error:
-        print(f"[Supabase] 市場資料同步模組載入失敗，保留 JSON fallback：{error}")
+        print(f"[Supabase] 市場資料同步模組載入失敗，改寫 JSON fallback：{error}")
+        _save_market_data_to_json(data)
         return
 
+    supabase_ok = True
     for coin_data in data.values():
-        upsert_market_data(coin_data)
+        if not upsert_market_data(coin_data):
+            supabase_ok = False
+
+    if supabase_ok:
+        print("[MarketCollector] 已寫入 Supabase market_data")
+        return
+
+    print("[MarketCollector] Supabase 寫入失敗，改寫 data/market_data.json")
+    _save_market_data_to_json(data)
 
 
 def load_market_data():

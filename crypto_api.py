@@ -39,6 +39,31 @@ SUPPORTED_COINS = {
 }
 
 
+def get_coin_from_supabase(symbol):
+    """Read one coin from Supabase market_data; return None when unavailable."""
+
+    normalized_symbol = str(symbol).strip().upper()
+    print(f"[SupabaseData] 嘗試讀取 market_data：{normalized_symbol}")
+
+    try:
+        from database_manager import get_market_data_by_symbol
+
+        coin_data = get_market_data_by_symbol(normalized_symbol)
+    except Exception as error:
+        print(f"[SupabaseData] 讀取 market_data 失敗：{error}")
+        print("[SupabaseData] 是否找到資料：False")
+        return None
+
+    found = isinstance(coin_data, dict)
+    print(f"[SupabaseData] 是否找到資料：{found}")
+    if not found:
+        return None
+
+    result = dict(coin_data)
+    result["source"] = "Supabase"
+    return result
+
+
 # CoinCap 的 asset id 和使用者輸入的代號不一定完全一樣。
 # 例如使用者輸入 btc，但 CoinCap URL 要用 bitcoin。
 # 先用明確表格管理轉換，debug 時也比較容易檢查是否打到正確 endpoint。
@@ -52,17 +77,6 @@ def get_coin_from_local_data(symbol):
     # market_data.json 是 collector 寫到硬碟的共享市場資料，重開程式還在；
     # price_cache 則是 get_coin_price() 裡的記憶體快取，只活在目前這個 Python 程序。
     normalized_symbol = str(symbol).strip().lower()
-
-    try:
-        from database_manager import get_market_data_by_symbol
-
-        db_coin_data = get_market_data_by_symbol(normalized_symbol)
-        if isinstance(db_coin_data, dict):
-            result = dict(db_coin_data)
-            result["source"] = "本地 market_data.json"
-            return result
-    except Exception as error:
-        print(f"[Supabase] 查詢 market_data 失敗，改讀 data/market_data.json：{error}")
 
     print("[LocalData] 嘗試讀取 data/market_data.json")
     print(f"[LocalData] 檔案是否存在：{LOCAL_MARKET_DATA_FILE.exists()}")
