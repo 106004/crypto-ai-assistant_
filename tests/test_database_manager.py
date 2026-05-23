@@ -127,7 +127,9 @@ class DatabaseManagerTest(unittest.TestCase):
         self.assertEqual(self.client.tables["users"].rows[-1]["line_user_id"], "U2")
 
     def test_upsert_market_data_updates_existing_symbol(self):
-        with patch.object(database_manager, "get_supabase_client", return_value=self.client):
+        with patch.object(database_manager, "get_supabase_client", return_value=self.client), patch(
+            "builtins.print"
+        ) as print_log:
             ok = database_manager.upsert_market_data(
                 {
                     "symbol": "btc",
@@ -141,6 +143,24 @@ class DatabaseManagerTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(self.client.tables["market_data"].rows[0]["symbol"], "BTC")
         self.assertEqual(self.client.tables["market_data"].rows[0]["price_usd"], 100)
+        print_log.assert_any_call("[Supabase] BTC 寫入成功")
+
+    def test_upsert_market_data_logs_symbol_when_write_fails(self):
+        with patch.object(database_manager, "get_supabase_client", return_value=self.client), patch.object(
+            self.client.tables["market_data"], "execute", side_effect=RuntimeError("db down")
+        ), patch("builtins.print") as print_log:
+            ok = database_manager.upsert_market_data(
+                {
+                    "symbol": "btc",
+                    "name": "Bitcoin",
+                    "price_usd": 100,
+                    "change_24h": 2.5,
+                    "updated_at": "now",
+                }
+            )
+
+        self.assertFalse(ok)
+        print_log.assert_any_call("[Supabase] BTC 寫入失敗：db down")
 
     def test_get_market_data_by_symbol_returns_matching_symbol(self):
         with patch.object(database_manager, "get_supabase_client", return_value=self.client):

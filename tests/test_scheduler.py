@@ -43,6 +43,67 @@ class SchedulerTest(unittest.TestCase):
 
         collect_market_data.assert_called_once_with()
 
+    def test_hourly_favorite_coin_price_uses_supabase_before_local_and_api(self):
+        supabase_coin = {
+            "name": "Bitcoin",
+            "symbol": "BTC",
+            "price_usd": 100,
+            "change_24h": 1.5,
+            "updated_at": "now",
+            "source": "Supabase",
+        }
+
+        with patch.object(
+            scheduler,
+            "get_all_users",
+            return_value=[{"user_id": "U1", "favorite_coin": "btc"}],
+        ), patch.object(
+            scheduler, "get_coin_from_supabase", return_value=supabase_coin
+        ) as get_supabase, patch.object(
+            scheduler, "get_coin_from_local_data", return_value=None
+        ) as get_local, patch.object(
+            scheduler, "get_coin_price", return_value=None
+        ) as get_api, patch.object(
+            scheduler, "push_message"
+        ) as push_message:
+            scheduler.send_hourly_favorite_coin_price()
+
+        get_supabase.assert_called_once_with("btc")
+        get_local.assert_not_called()
+        get_api.assert_not_called()
+        push_message.assert_called_once()
+        self.assertIn("Supabase", push_message.call_args.args[1])
+
+    def test_hourly_favorite_coin_price_falls_back_to_local_before_api(self):
+        local_coin = {
+            "name": "Bitcoin",
+            "symbol": "BTC",
+            "price_usd": 90,
+            "change_24h": 0.5,
+            "updated_at": "now",
+            "source": "本地 market_data.json",
+        }
+
+        with patch.object(
+            scheduler,
+            "get_all_users",
+            return_value=[{"user_id": "U1", "favorite_coin": "btc"}],
+        ), patch.object(
+            scheduler, "get_coin_from_supabase", return_value=None
+        ), patch.object(
+            scheduler, "get_coin_from_local_data", return_value=local_coin
+        ) as get_local, patch.object(
+            scheduler, "get_coin_price", return_value=None
+        ) as get_api, patch.object(
+            scheduler, "push_message"
+        ) as push_message:
+            scheduler.send_hourly_favorite_coin_price()
+
+        get_local.assert_called_once_with("btc")
+        get_api.assert_not_called()
+        push_message.assert_called_once()
+        self.assertIn("本地 market_data.json", push_message.call_args.args[1])
+
 
 if __name__ == "__main__":
     unittest.main()

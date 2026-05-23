@@ -56,10 +56,12 @@ def update_market_data():
     # 外部 cron 是由 Render 外面的服務定時打進來。
     # 只要 cron 每 5 分鐘呼叫這個 endpoint，就會喚醒服務並執行更新，
     # 比放在 Render 免費版內部的背景 scheduler 更可靠。
-    print("[ExternalCron] 收到市場資料更新請求")
-    print("[ExternalCron] 開始執行 collect_market_data()")
+    print("[ExternalCron] 開始更新")
 
     try:
+        # collect_market_data() 會負責寫 Supabase，失敗時也會維持 JSON fallback。
+        # 它可能回傳整份 market data，但 cron-job.org 只需要知道有沒有成功，
+        # 所以這裡刻意不把回傳值放進 HTTP response，避免 response 太大。
         collect_market_data()
     except Exception as error:
         print(f"[ExternalCron] 市場資料更新失敗：{error}")

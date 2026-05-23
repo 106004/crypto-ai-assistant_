@@ -3,6 +3,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import requests
+
 import crypto_api
 import line_bot
 import market_collector
@@ -127,12 +129,79 @@ class MarketDataSourceTest(unittest.TestCase):
             market_file = Path(temp_dir) / "market_data.json"
             with patch.object(market_collector, "MARKET_DATA_FILE", market_file), patch(
                 "database_manager.upsert_market_data", return_value=True
-            ) as upsert_market_data:
+            ) as upsert_market_data, patch("builtins.print") as print_log:
                 market_collector.save_market_data(data)
 
             self.assertFalse(market_file.exists())
 
         upsert_market_data.assert_called_once_with(data["btc"])
+        print_log.assert_any_call("[MarketCollector] 準備寫入 Supabase：BTC")
+
+    def test_market_collector_logs_fallback_when_supabase_write_fails(self):
+        data = {
+            "btc": {
+                "name": "Bitcoin",
+                "symbol": "BTC",
+                "price_usd": 100,
+                "change_24h": 1.5,
+                "updated_at": "now",
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            market_file = Path(temp_dir) / "market_data.json"
+            with patch.object(market_collector, "MARKET_DATA_FILE", market_file), patch(
+                "database_manager.upsert_market_data", return_value=False
+            ), patch("builtins.print") as print_log:
+                market_collector.save_market_data(data)
+
+            self.assertTrue(market_file.exists())
+
+        print_log.assert_any_call("[MarketCollector] 使用 fallback local JSON")
+
+    def test_collect_market_data_logs_coin_update_and_completion(self):
+        response_data = {
+            "bitcoin": {
+                "usd": 100,
+                "usd_24h_change": 1.5,
+            }
+        }
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return response_data
+
+        with patch.object(
+            market_collector,
+            "TRACKED_COINS",
+            {"btc": {"id": "bitcoin", "name": "Bitcoin", "symbol": "BTC"}},
+        ), patch.object(market_collector.requests, "get", return_value=FakeResponse()), patch.object(
+            market_collector, "save_market_data"
+        ), patch("builtins.print") as print_log:
+            market_collector.collect_market_data()
+
+        print_log.assert_any_call("[MarketCollector] 準備更新：BTC")
+        print_log.assert_any_call("[MarketCollector] 本次市場更新完成")
+
+    def test_collect_market_data_logs_rate_limit_when_coingecko_returns_429(self):
+        response = requests.Response()
+        response.status_code = 429
+        error = requests.HTTPError("429 Client Error", response=response)
+
+        class FakeResponse:
+            def raise_for_status(self):
+                raise error
+
+        with patch.object(market_collector.requests, "get", return_value=FakeResponse()), patch.object(
+            market_collector, "load_market_data", return_value={}
+        ), patch("builtins.print") as print_log:
+            market_collector.collect_market_data()
+
+        print_log.assert_any_call("[MarketCollector] CoinGecko 被限流")
+        print_log.assert_any_call("[MarketCollector] 本次市場更新完成")
 
 
 if __name__ == "__main__":

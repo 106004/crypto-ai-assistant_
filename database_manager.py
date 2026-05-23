@@ -184,8 +184,16 @@ def upsert_market_data(coin_data):
         "updated_at": normalized.get("updated_at"),
     }
 
-    def command():
-        existing = get_market_data_by_symbol(symbol)
+    try:
+        existing_response = (
+            client.table("market_data")
+            .select("*")
+            .eq("symbol", symbol)
+            .limit(1)
+            .execute()
+        )
+        existing = _first_row(existing_response)
+
         if existing:
             response = (
                 client.table("market_data")
@@ -195,12 +203,13 @@ def upsert_market_data(coin_data):
             )
         else:
             response = client.table("market_data").insert(normalized).execute()
-
-        return response
-
-    response = _execute_safely(command)
-    if response is None:
+    except Exception as error:
+        print(f"[Supabase] {symbol} 寫入失敗：{error}")
         return False
 
-    print(f"[Supabase] 更新 {symbol} 成功")
+    if response is None:
+        print(f"[Supabase] {symbol} 寫入失敗：沒有回傳結果")
+        return False
+
+    print(f"[Supabase] {symbol} 寫入成功")
     return True

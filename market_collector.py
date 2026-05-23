@@ -45,11 +45,14 @@ def save_market_data(data):
         from database_manager import upsert_market_data
     except Exception as error:
         print(f"[Supabase] 市場資料同步模組載入失敗，改寫 JSON fallback：{error}")
+        print("[MarketCollector] 使用 fallback local JSON")
         _save_market_data_to_json(data)
         return
 
     supabase_ok = True
     for coin_data in data.values():
+        symbol = str(coin_data.get("symbol", "")).strip().upper() or "UNKNOWN"
+        print(f"[MarketCollector] 準備寫入 Supabase：{symbol}")
         if not upsert_market_data(coin_data):
             supabase_ok = False
 
@@ -58,6 +61,7 @@ def save_market_data(data):
         return
 
     print("[MarketCollector] Supabase 寫入失敗，改寫 data/market_data.json")
+    print("[MarketCollector] 使用 fallback local JSON")
     _save_market_data_to_json(data)
 
 
@@ -99,19 +103,30 @@ def collect_market_data():
         response = requests.get(COINGECKO_PRICE_URL, params=params, timeout=10)
         response.raise_for_status()
         api_data = response.json()
+    except requests.HTTPError as error:
+        response = getattr(error, "response", None)
+        if getattr(response, "status_code", None) == 429:
+            print("[MarketCollector] CoinGecko 被限流")
+        print("[MarketCollector] CoinGecko API 暫時失敗，改用既有本地資料")
+        print(f"[MarketCollector] 錯誤：{error}")
+        print("[MarketCollector] 本次市場更新完成")
+        return load_market_data()
     except requests.RequestException as error:
         print("[MarketCollector] CoinGecko API 暫時失敗，改用既有本地資料")
         print(f"[MarketCollector] 錯誤：{error}")
+        print("[MarketCollector] 本次市場更新完成")
         return load_market_data()
     except ValueError as error:
         print("[MarketCollector] CoinGecko 回傳不是合法 JSON，改用既有本地資料")
         print(f"[MarketCollector] 錯誤：{error}")
+        print("[MarketCollector] 本次市場更新完成")
         return load_market_data()
 
     updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     market_data = {}
 
     for key, coin in TRACKED_COINS.items():
+        print(f"[MarketCollector] 準備更新：{coin['symbol']}")
         coin_data = api_data.get(coin["id"], {})
         price_usd = coin_data.get("usd")
         change_24h = coin_data.get("usd_24h_change")
@@ -134,8 +149,10 @@ def collect_market_data():
         save_market_data(market_data)
     else:
         print("[MarketCollector] 沒有可寫入的市場資料，保留既有本地資料")
+        print("[MarketCollector] 本次市場更新完成")
         return load_market_data()
 
+    print("[MarketCollector] 本次市場更新完成")
     return market_data
 
 

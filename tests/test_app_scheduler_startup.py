@@ -32,6 +32,74 @@ class AppSchedulerStartupTest(unittest.TestCase):
 
         start_scheduler.assert_called_once_with()
 
+    def test_update_market_data_endpoint_runs_collector(self):
+        sys.modules.pop("app", None)
+
+        with patch("scheduler.start_scheduler"):
+            app_module = importlib.import_module("app")
+
+        with patch.object(app_module, "collect_market_data") as collect_market_data, patch(
+            "builtins.print"
+        ) as print_log:
+            response = app_module.app.test_client().get("/update-market-data")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json(),
+            {"status": "success", "message": "market data updated"},
+        )
+        collect_market_data.assert_called_once_with()
+        print_log.assert_any_call("[ExternalCron] 開始更新")
+        print_log.assert_any_call("[ExternalCron] 市場資料更新成功")
+
+    def test_update_market_data_endpoint_does_not_return_collected_market_data(self):
+        sys.modules.pop("app", None)
+
+        large_market_data = {
+            f"coin_{index}": {
+                "name": "Bitcoin",
+                "symbol": "BTC",
+                "price_usd": 100000,
+                "change_24h": 1.23,
+                "updated_at": "2026-05-23 12:00:00",
+            }
+            for index in range(100)
+        }
+
+        with patch("scheduler.start_scheduler"):
+            app_module = importlib.import_module("app")
+
+        with patch.object(app_module, "collect_market_data", return_value=large_market_data), patch(
+            "builtins.print"
+        ):
+            response = app_module.app.test_client().get("/update-market-data")
+
+        response_body = response.get_data(as_text=True)
+        self.assertEqual(
+            response.get_json(),
+            {"status": "success", "message": "market data updated"},
+        )
+        self.assertNotIn("coin_99", response_body)
+        self.assertLess(len(response_body), 80)
+
+    def test_update_market_data_endpoint_returns_error_when_collector_fails(self):
+        sys.modules.pop("app", None)
+
+        with patch("scheduler.start_scheduler"):
+            app_module = importlib.import_module("app")
+
+        with patch.object(
+            app_module, "collect_market_data", side_effect=RuntimeError("db down")
+        ), patch("builtins.print") as print_log:
+            response = app_module.app.test_client().get("/update-market-data")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(
+            response.get_json(),
+            {"status": "error", "message": "db down"},
+        )
+        print_log.assert_any_call("[ExternalCron] 市場資料更新失敗：db down")
+
 
 if __name__ == "__main__":
     unittest.main()
