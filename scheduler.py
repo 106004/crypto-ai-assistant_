@@ -1,6 +1,6 @@
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from crypto_api import get_coin_price
+from crypto_api import get_coin_from_local_data, get_coin_from_supabase, get_coin_price
 from line_bot import DAILY_MANUAL_TEXT, push_message
 from market_collector import collect_market_data
 from user_manager import get_all_users
@@ -14,23 +14,45 @@ from user_manager import get_all_users
 # 1. 每日提醒：每天早上 9:00 傳一次使用說明，提醒使用者有哪些指令可以用。
 # 2. 每小時幣價：每小時檢查一次使用者最愛幣種，推播該幣種的最新價格。
 # 3. 市場資料更新：每 5 分鐘更新 data/market_data.json，讓 LINE Bot 查價時讀本地檔案。
+#
+# 注意：APScheduler 在本機測試很好用，因為你的電腦和 Flask server 通常會一直開著。
+# 但 Render 免費版沒流量時會 sleep，服務睡著後背景 scheduler 也不會準時跑。
+# 所以正式雲端環境要更新市場資料時，建議用外部 cron 服務每 5 分鐘呼叫
+# app.py 的 /update-market-data endpoint，讓外部服務負責準時觸發更新。
 _scheduler = None
 
 
 def _format_hourly_coin_price_message(coin_data):
-    """把 CoinGecko 回傳的幣價資料整理成每小時推播訊息。"""
+    """把幣價資料整理成每小時推播訊息。"""
 
     change_24h = float(coin_data["change_24h"])
     change_text = f"{change_24h:+.2f}%"
     price_text = f"{float(coin_data['price_usd']):,.2f}"
+    source = coin_data.get("source", "即時 API")
+    if source not in ("Supabase", "本地 market_data.json"):
+        source = "即時 API"
 
     return (
         f"Crypto AI Assistant 每小時幣價提醒\n\n"
         f"你設定的最愛幣種：{coin_data['symbol']}\n"
         f"{coin_data['name']} 目前價格：{price_text} USD\n"
         f"24H 漲跌：{change_text}\n\n"
-        "資料來源：CoinGecko"
+        f"資料來源：{source}"
     )
+
+
+def _get_favorite_coin_price(symbol):
+    """Use the same market data priority as LINE price lookup."""
+
+    coin_data = get_coin_from_supabase(symbol)
+    if coin_data is not None:
+        return coin_data
+
+    coin_data = get_coin_from_local_data(symbol)
+    if coin_data is not None:
+        return coin_data
+
+    return get_coin_price(symbol)
 
 
 def send_daily_manual_to_all_users():
@@ -78,7 +100,7 @@ def send_hourly_favorite_coin_price():
             continue
 
         try:
-            coin_data = get_coin_price(favorite_coin)
+            coin_data = _get_favorite_coin_price(favorite_coin)
         except Exception as error:
             # scheduler 不能因為單次 CoinGecko 失敗就整個停止。
             # 所以這裡只記錄錯誤，然後繼續處理下一位使用者。
@@ -157,8 +179,10 @@ def start_scheduler():
         replace_existing=True,
     )
 
-    # 市場資料更新：固定每 5 分鐘抓一次最新資料並寫入 data/market_data.json。
-    # LINE Bot 應該優先讀這個檔案，因為本地檔案回應快、穩定，也能減少外部 API 壓力。
+    # 市場資料更新：本機測試時可用 APScheduler 每 5 分鐘抓一次最新資料。
+    # Render 免費版會 sleep，這個內建排程不保證準時；正式雲端更新應改由
+    # 外部 cron 服務呼叫 /update-market-data，比較能穩定地喚醒服務並觸發更新。
+    # LINE Bot 應該優先讀這份資料，因為快取資料回應快、穩定，也能減少外部 API 壓力。
     print("[Scheduler] 啟動市場資料更新排程：每 5 分鐘")
     _scheduler.add_job(
         update_market_data_job,

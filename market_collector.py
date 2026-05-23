@@ -79,10 +79,12 @@ def load_market_data():
 
 
 def collect_market_data():
-    """用 CoinGecko batch request 收集 10 種幣，並存進 data/market_data.json。"""
+    """用 CoinGecko batch request 收集 10 種幣，並寫入 Supabase 或 JSON fallback。"""
 
     print("[MarketCollector] 開始收集市場資料")
 
+    # 這個函式刻意放在檔案最外層，不放在 if __name__ == "__main__" 裡。
+    # 這樣 scheduler.py 可以定時呼叫，app.py 的 /update-market-data 也可以被外部 cron 觸發後呼叫。
     # 使用 batch request，是因為 CoinGecko simple price API 可以用逗號一次查多個 id。
     # 10 種幣如果打 10 次 API，會讓 collector 變慢，也更容易碰到 API rate limit。
     # 先定時收集資料，再讓 LINE Bot 讀本地檔案，可以讓使用者查價更快，

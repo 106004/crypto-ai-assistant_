@@ -1,8 +1,9 @@
 import os
 
-from flask import Flask, request
+from flask import Flask, jsonify, request
 
 from line_bot import handle_webhook
+from market_collector import collect_market_data
 from scheduler import start_scheduler
 
 
@@ -35,7 +36,9 @@ def _start_scheduler_once():
     _scheduler_started = True
 
 
-# Flask 應用啟動時就啟動 scheduler，讓每日提醒、每小時推播和市場資料更新都會自動運作。
+# Flask 應用啟動時仍保留 scheduler，方便本機測試每日提醒、每小時推播等功能。
+# 但 Render 免費版服務沒流量時會 sleep，背景 scheduler 也會一起停下來，
+# 所以雲端正式更新市場資料時，不能完全依賴這個內建 scheduler 準時每 5 分鐘執行。
 _start_scheduler_once()
 
 
@@ -44,6 +47,26 @@ def home():
     """健康檢查用首頁，確認 Flask server 正常啟動。"""
 
     return "Crypto AI Assistant is running"
+
+
+@app.route("/update-market-data", methods=["GET"])
+def update_market_data():
+    """讓外部 cron 服務觸發市場資料更新。"""
+
+    # 外部 cron 是由 Render 外面的服務定時打進來。
+    # 只要 cron 每 5 分鐘呼叫這個 endpoint，就會喚醒服務並執行更新，
+    # 比放在 Render 免費版內部的背景 scheduler 更可靠。
+    print("[ExternalCron] 收到市場資料更新請求")
+    print("[ExternalCron] 開始執行 collect_market_data()")
+
+    try:
+        collect_market_data()
+    except Exception as error:
+        print(f"[ExternalCron] 市場資料更新失敗：{error}")
+        return jsonify({"status": "error", "message": str(error)}), 500
+
+    print("[ExternalCron] 市場資料更新成功")
+    return jsonify({"status": "success", "message": "market data updated"})
 
 
 @app.route("/callback", methods=["POST"])

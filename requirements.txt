@@ -1,9 +1,7 @@
 flask
 requests
 python-dotenv
-pyngrok
-pyperclip
 apscheduler
+line-bot-sdk
 supabase
-# Render 需要 gunicorn 當正式環境的 WSGI server，不能只靠 Flask 內建開發伺服器。
 gunicorn
