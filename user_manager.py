@@ -68,6 +68,44 @@ def _normalize_user(user):
     return normalized_user
 
 
+def _user_to_db_row(user):
+    """把 JSON 使用的 user_id 欄位轉成 Supabase users table 的 line_user_id 欄位。"""
+
+    if not isinstance(user, dict):
+        return {}
+
+    row = dict(user)
+    row["line_user_id"] = row.pop("user_id", row.get("line_user_id", ""))
+    return row
+
+
+def _db_row_to_user(row):
+    """把 Supabase users table 的 line_user_id 轉回既有程式使用的 user_id。"""
+
+    if not isinstance(row, dict):
+        return None
+
+    user = dict(row)
+    user["user_id"] = user.pop("line_user_id", user.get("user_id", ""))
+    return _normalize_user(user)
+
+
+def _sync_user_to_db(user):
+    """把單一使用者同步到 Supabase；失敗時保留 JSON，不影響 LINE Bot。"""
+
+    normalized_user = _normalize_user(user)
+    if normalized_user is None:
+        return False
+
+    try:
+        from database_manager import upsert_user
+    except Exception as error:
+        print(f"[Supabase] 使用者同步模組載入失敗，保留 JSON fallback：{error}")
+        return False
+
+    return upsert_user(_user_to_db_row(normalized_user))
+
+
 def _normalize_data(data):
     """把整份 users.json 整理成固定格式。"""
 
@@ -152,14 +190,28 @@ def save_user(user_id):
     for user in users:
         if user["user_id"] == user_id:
             user["last_seen_at"] = _now_text()
-            return _save_data(data)
+            saved_data = _save_data(data)
+            _sync_user_to_db(user)
+            return saved_data
 
-    users.append(_make_default_user(user_id))
-    return _save_data(data)
+    new_user = _make_default_user(user_id)
+    users.append(new_user)
+    saved_data = _save_data(data)
+    _sync_user_to_db(new_user)
+    return saved_data
 
 
 def get_user(user_id):
     """回傳指定使用者的完整資料；找不到就回傳 None。"""
+
+    try:
+        from database_manager import get_user_by_line_id
+
+        db_user = _db_row_to_user(get_user_by_line_id(user_id))
+        if db_user is not None:
+            return db_user
+    except Exception as error:
+        print(f"[Supabase] 查詢使用者失敗，改讀 users.json：{error}")
 
     for user in load_users()["users"]:
         if user["user_id"] == user_id:
@@ -178,7 +230,9 @@ def mark_user_onboarded(user_id):
             user["onboarded"] = True
             user["onboarded_at"] = _now_text()
             user["last_seen_at"] = _now_text()
-            return _save_data(data)
+            saved_data = _save_data(data)
+            _sync_user_to_db(user)
+            return saved_data
 
     return _save_data(data)
 
@@ -194,13 +248,25 @@ def update_favorite_coin(user_id, coin):
             # 統一存小寫，顯示給使用者時再轉大寫。
             user["favorite_coin"] = str(coin).strip().lower()
             user["last_seen_at"] = _now_text()
-            return _save_data(data)
+            saved_data = _save_data(data)
+            _sync_user_to_db(user)
+            return saved_data
 
     return _save_data(data)
 
 
 def get_all_users():
     """回傳所有使用者資料，給 scheduler 每日推播使用。"""
+
+    try:
+        from database_manager import get_all_users_from_db
+
+        db_users = [_db_row_to_user(row) for row in get_all_users_from_db()]
+        db_users = [user for user in db_users if user is not None]
+        if db_users:
+            return db_users
+    except Exception as error:
+        print(f"[Supabase] 查詢全部使用者失敗，改讀 users.json：{error}")
 
     return load_users()["users"]
 

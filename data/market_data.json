@@ -2,71 +2,71 @@
   "btc": {
     "name": "Bitcoin",
     "symbol": "BTC",
-    "price_usd": 74499,
-    "change_24h": -3.655341290644213,
-    "updated_at": "2026-05-23 15:58:19"
+    "price_usd": 74732,
+    "change_24h": -3.2654798422433475,
+    "updated_at": "2026-05-23 19:37:58"
   },
   "eth": {
     "name": "Ethereum",
     "symbol": "ETH",
-    "price_usd": 2022.3,
-    "change_24h": -4.908364488980056,
-    "updated_at": "2026-05-23 15:58:19"
+    "price_usd": 2030.35,
+    "change_24h": -4.455561577096388,
+    "updated_at": "2026-05-23 19:37:58"
   },
   "sol": {
     "name": "Solana",
     "symbol": "SOL",
-    "price_usd": 81.96,
-    "change_24h": -5.663693542727435,
-    "updated_at": "2026-05-23 15:58:19"
+    "price_usd": 82.34,
+    "change_24h": -5.249091459490115,
+    "updated_at": "2026-05-23 19:37:58"
   },
   "bnb": {
     "name": "BNB",
     "symbol": "BNB",
-    "price_usd": 636.4,
-    "change_24h": -3.396252117593305,
-    "updated_at": "2026-05-23 15:58:19"
+    "price_usd": 639.64,
+    "change_24h": -2.514231653681853,
+    "updated_at": "2026-05-23 19:37:58"
   },
   "xrp": {
     "name": "XRP",
     "symbol": "XRP",
-    "price_usd": 1.31,
-    "change_24h": -3.8988503227981,
-    "updated_at": "2026-05-23 15:58:19"
+    "price_usd": 1.32,
+    "change_24h": -2.3858972319780283,
+    "updated_at": "2026-05-23 19:37:58"
   },
   "doge": {
     "name": "Dogecoin",
     "symbol": "DOGE",
-    "price_usd": 0.098638,
-    "change_24h": -6.555340393350406,
-    "updated_at": "2026-05-23 15:58:19"
+    "price_usd": 0.099502,
+    "change_24h": -5.793251540011934,
+    "updated_at": "2026-05-23 19:37:58"
   },
   "ada": {
     "name": "Cardano",
     "symbol": "ADA",
-    "price_usd": 0.237182,
-    "change_24h": -5.652770964552269,
-    "updated_at": "2026-05-23 15:58:19"
+    "price_usd": 0.238594,
+    "change_24h": -5.0600469853977295,
+    "updated_at": "2026-05-23 19:37:58"
   },
   "ton": {
     "name": "Toncoin",
     "symbol": "TON",
-    "price_usd": 1.76,
-    "change_24h": -12.56180996375078,
-    "updated_at": "2026-05-23 15:58:19"
+    "price_usd": 1.77,
+    "change_24h": -11.062264202250754,
+    "updated_at": "2026-05-23 19:37:58"
   },
   "trx": {
     "name": "TRON",
     "symbol": "TRX",
-    "price_usd": 0.360403,
-    "change_24h": -1.1855397256315368,
-    "updated_at": "2026-05-23 15:58:19"
+    "price_usd": 0.359016,
+    "change_24h": -1.6155399271430912,
+    "updated_at": "2026-05-23 19:37:58"
   },
   "avax": {
     "name": "Avalanche",
     "symbol": "AVAX",
-    "price_usd": 8.91,
-    "change_24h": -6.324320049553209,
-    "updated_at": "2026-05-23 15:58:19"
+    "price_usd": 8.9,
+    "change_24h": -6.078772646297929,
+    "updated_at": "2026-05-23 19:37:58"
   }
 }

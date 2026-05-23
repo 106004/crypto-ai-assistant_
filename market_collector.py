@@ -35,6 +35,16 @@ def save_market_data(data):
         print(f"[MarketCollector] 已寫入 {MARKET_DATA_FILE}")
     except OSError as error:
         print(f"[MarketCollector] 寫入 market_data.json 失敗：{error}")
+        return
+
+    try:
+        from database_manager import upsert_market_data
+    except Exception as error:
+        print(f"[Supabase] 市場資料同步模組載入失敗，保留 JSON fallback：{error}")
+        return
+
+    for coin_data in data.values():
+        upsert_market_data(coin_data)
 
 
 def load_market_data():
