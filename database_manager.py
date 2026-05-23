@@ -204,12 +204,12 @@ def upsert_market_data(coin_data):
         else:
             response = client.table("market_data").insert(normalized).execute()
     except Exception as error:
-        print(f"[Supabase] {symbol} 寫入失敗：{error}")
+        print(f"[Supabase] {symbol} 更新失敗：{error}")
         return False
 
     if response is None:
-        print(f"[Supabase] {symbol} 寫入失敗：沒有回傳結果")
+        print(f"[Supabase] {symbol} 更新失敗：沒有回傳結果")
         return False
 
-    print(f"[Supabase] {symbol} 寫入成功")
+    print(f"[Supabase] {symbol} 更新成功")
     return True

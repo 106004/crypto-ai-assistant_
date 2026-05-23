@@ -3,7 +3,13 @@ import json
 import requests
 
 from config import LINE_CHANNEL_ACCESS_TOKEN
-from crypto_api import SUPPORTED_COINS, get_coin_from_local_data, get_coin_from_supabase, get_coin_price
+from crypto_api import (
+    SUPPORTED_COINS,
+    get_coin_from_local_data,
+    get_coin_from_supabase,
+    get_coin_price,
+    get_tradingview_fallback_message,
+)
 from user_manager import get_user, mark_user_onboarded, save_user, update_favorite_coin
 
 
@@ -200,7 +206,7 @@ def _handle_coin_price(reply_token, user_text):
         coin_data = get_coin_price(user_text)
 
     if coin_data is None:
-        reply_message(reply_token, "暫時查不到幣價，可能是 CoinGecko API 或網路連線有問題，請稍後再試。")
+        reply_message(reply_token, get_tradingview_fallback_message())
         return
 
     if isinstance(coin_data, str):

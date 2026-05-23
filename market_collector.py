@@ -103,6 +103,8 @@ def collect_market_data():
         response = requests.get(COINGECKO_PRICE_URL, params=params, timeout=10)
         response.raise_for_status()
         api_data = response.json()
+        print("[MarketCollector] CoinGecko API 查詢成功")
+        print("[MarketCollector] 目前資料來源：即時 API")
     except requests.HTTPError as error:
         response = getattr(error, "response", None)
         if getattr(response, "status_code", None) == 429:

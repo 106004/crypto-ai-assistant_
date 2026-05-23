@@ -19,7 +19,7 @@ COINGECKO_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
 COINCAP_ASSET_URL = "https://api.coincap.io/v2/assets/{asset_id}"
 BACKUP_API_NAME = "CoinCap"
 LOCAL_MARKET_DATA_FILE = Path(__file__).resolve().parent / "data" / "market_data.json"
-ALL_MARKET_DATA_BUSY_MESSAGE = "目前所有市場資料來源都忙碌中，\n請稍後再試。"
+MARKET_DATA_MAX_AGE_SECONDS = 10 * 60
 
 
 # 使用者通常會輸入 btc、eth 這種交易所常見代號。
@@ -37,6 +37,61 @@ SUPPORTED_COINS = {
     "trx": {"id": "tron", "name": "TRON", "symbol": "TRX"},
     "avax": {"id": "avalanche-2", "name": "Avalanche", "symbol": "AVAX"},
 }
+
+TRADINGVIEW_SYMBOLS = {
+    "btc": "BTCUSDT",
+    "eth": "ETHUSDT",
+    "sol": "SOLUSDT",
+    "bnb": "BNBUSDT",
+    "xrp": "XRPUSDT",
+    "doge": "DOGEUSDT",
+    "ada": "ADAUSDT",
+    "ton": "TONUSDT",
+    "trx": "TRXUSDT",
+    "avax": "AVAXUSDT",
+}
+
+
+def get_tradingview_url(symbol):
+    normalized_symbol = str(symbol).strip().lower()
+    tradingview_symbol = TRADINGVIEW_SYMBOLS.get(normalized_symbol)
+    if tradingview_symbol is None:
+        return None
+
+    return f"https://www.tradingview.com/symbols/{tradingview_symbol}/"
+
+
+def get_all_mainstream_tradingview_links():
+    lines = []
+    for symbol_key, tradingview_symbol in TRADINGVIEW_SYMBOLS.items():
+        lines.append(f"{symbol_key.upper()}：")
+        lines.append(f"https://www.tradingview.com/symbols/{tradingview_symbol}/")
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
+def get_tradingview_fallback_message():
+    return (
+        "⚠️ 即時市場資料服務暫時異常\n\n"
+        "由於價格具有即時性，\n"
+        "系統不會使用過期價格避免誤導。\n\n"
+        "你可以先查看 TradingView 即時行情：\n\n"
+        f"{get_all_mainstream_tradingview_links()}"
+    )
+
+
+def _is_market_data_fresh(updated_at):
+    if not updated_at:
+        return False
+
+    try:
+        updated_time = datetime.strptime(str(updated_at), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+
+    age_seconds = (datetime.now() - updated_time).total_seconds()
+    return 0 <= age_seconds <= MARKET_DATA_MAX_AGE_SECONDS
 
 
 def get_coin_from_supabase(symbol):
@@ -57,6 +112,10 @@ def get_coin_from_supabase(symbol):
     found = isinstance(coin_data, dict)
     print(f"[SupabaseData] 是否找到資料：{found}")
     if not found:
+        return None
+
+    if not _is_market_data_fresh(coin_data.get("updated_at")):
+        print("[SupabaseData] market_data 已過期，改用即時 API。")
         return None
 
     result = dict(coin_data)
@@ -115,6 +174,11 @@ def get_coin_from_local_data(symbol):
 
     required_fields = ("name", "symbol", "price_usd", "change_24h", "updated_at")
     if any(field not in coin_data for field in required_fields):
+        print("[LocalData] 是否找到資料：False")
+        return None
+
+    if not _is_market_data_fresh(coin_data.get("updated_at")):
+        print("[LocalData] market_data.json 已過期，所以改用即時 API。")
         print("[LocalData] 是否找到資料：False")
         return None
 
@@ -337,5 +401,7 @@ def get_coin_price(symbol):
         return backup_result
 
     print("[CryptoAPI] 備用 API 失敗")
+    print("[CryptoAPI] API 全部失敗")
+    print("[CryptoAPI] 提供 TradingView fallback links")
     _print_final_source("全部失敗")
-    return ALL_MARKET_DATA_BUSY_MESSAGE
+    return get_tradingview_fallback_message()
