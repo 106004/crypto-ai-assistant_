@@ -3,7 +3,7 @@ import json
 import requests
 
 from config import LINE_CHANNEL_ACCESS_TOKEN
-from crypto_api import SUPPORTED_COINS, get_coin_price
+from crypto_api import SUPPORTED_COINS, get_coin_from_local_data, get_coin_price
 from user_manager import get_user, mark_user_onboarded, save_user, update_favorite_coin
 
 
@@ -73,15 +73,18 @@ def _format_coin_message(coin_data):
     change_24h = float(coin_data["change_24h"])
     change_text = f"{change_24h:+.2f}%"
     price_text = f"{float(coin_data['price_usd']):,.2f}"
-    source = coin_data.get("source", "CoinGecko")
+    source = coin_data.get("source", "即時 API")
+    if source != "本地 market_data.json":
+        source = "即時 API"
+    updated_at = coin_data.get("updated_at", "未知")
 
     return (
-        f"{coin_data['name']} 價格資訊\n\n"
-        f"目前價格：{price_text} USD\n"
-        f"24H 漲跌：{change_text}\n\n"
+        f"幣種名稱：{coin_data['name']} ({coin_data['symbol']})\n"
+        f"價格：{price_text} USD\n"
+        f"24H 漲跌：{change_text}\n"
+        f"updated_at：{updated_at}\n"
         f"資料來源：{source}"
     )
-
 
 def reply_message(reply_token, text):
     """使用 LINE Reply API 回覆文字訊息。"""
@@ -189,7 +192,11 @@ def _handle_mycoin(user_id, reply_token):
 def _handle_coin_price(reply_token, user_text):
     """處理 btc / eth / sol 等查價指令。"""
 
-    coin_data = get_coin_price(user_text)
+    # 先讀本地 market_data.json，讓常用幣種查價更快，也減少外部 API 呼叫次數。
+    # 如果本地檔案沒有資料，再退回原本的即時 API 查詢流程。
+    coin_data = get_coin_from_local_data(user_text)
+    if coin_data is None:
+        coin_data = get_coin_price(user_text)
 
     if coin_data is None:
         reply_message(reply_token, "暫時查不到幣價，可能是 CoinGecko API 或網路連線有問題，請稍後再試。")

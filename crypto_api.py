@@ -1,4 +1,7 @@
+import json
 import time
+from datetime import datetime
+from pathlib import Path
 
 import requests
 
@@ -15,6 +18,7 @@ COINGECKO_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
 #    剛好能組成原本 line_bot.py 需要的價格和 24 小時漲跌資料。
 COINCAP_ASSET_URL = "https://api.coincap.io/v2/assets/{asset_id}"
 BACKUP_API_NAME = "CoinCap"
+LOCAL_MARKET_DATA_FILE = Path(__file__).resolve().parent / "data" / "market_data.json"
 ALL_MARKET_DATA_BUSY_MESSAGE = "目前所有市場資料來源都忙碌中，\n請稍後再試。"
 
 
@@ -38,6 +42,39 @@ SUPPORTED_COINS = {
 # CoinCap 的 asset id 和使用者輸入的代號不一定完全一樣。
 # 例如使用者輸入 btc，但 CoinCap URL 要用 bitcoin。
 # 先用明確表格管理轉換，debug 時也比較容易檢查是否打到正確 endpoint。
+def get_coin_from_local_data(symbol):
+    """先從 data/market_data.json 讀幣價；讀不到或檔案壞掉時回傳 None。"""
+
+    # 優先讀本地資料，是為了讓 LINE 使用者查 btc/eth/sol 時可以很快拿到
+    # market_collector.py 事先整理好的結果，不必每一則訊息都等外部 API 回應。
+    # 不要每次都打外部 API，因為 CoinGecko/CoinCap 可能限流、變慢或短暫失敗；
+    # 本地檔案可降低 API 壓力，也能讓 Bot 在外部服務不穩時仍有資料可回。
+    # market_data.json 是 collector 寫到硬碟的共享市場資料，重開程式還在；
+    # price_cache 則是 get_coin_price() 裡的記憶體快取，只活在目前這個 Python 程序。
+    normalized_symbol = str(symbol).strip().lower()
+
+    if not LOCAL_MARKET_DATA_FILE.exists():
+        return None
+
+    try:
+        with LOCAL_MARKET_DATA_FILE.open("r", encoding="utf-8") as file:
+            market_data = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    coin_data = market_data.get(normalized_symbol)
+    if not isinstance(coin_data, dict):
+        return None
+
+    required_fields = ("name", "symbol", "price_usd", "change_24h", "updated_at")
+    if any(field not in coin_data for field in required_fields):
+        return None
+
+    result = dict(coin_data)
+    result["source"] = "本地 market_data.json"
+    return result
+
+
 COINCAP_ASSET_IDS = {
     "btc": "bitcoin",
     "eth": "ethereum",
@@ -78,6 +115,7 @@ def _build_price_result(source, coin, price_usd, change_24h):
         "symbol": coin["symbol"],
         "price_usd": price_usd,
         "change_24h": change_24h,
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
@@ -205,6 +243,7 @@ def _get_coin_price_from_coincap(normalized_symbol):
         "symbol": data.get("symbol", normalized_symbol.upper()),
         "price_usd": price_usd,
         "change_24h": change_24h,
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
