@@ -19,7 +19,7 @@ COINGECKO_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
 COINCAP_ASSET_URL = "https://api.coincap.io/v2/assets/{asset_id}"
 BACKUP_API_NAME = "CoinCap"
 LOCAL_MARKET_DATA_FILE = Path(__file__).resolve().parent / "data" / "market_data.json"
-MARKET_DATA_MAX_AGE_SECONDS = 10 * 60
+MARKET_DATA_MAX_AGE_SECONDS = 5 * 60
 
 
 # 使用者通常會輸入 btc、eth 這種交易所常見代號。
@@ -74,8 +74,8 @@ def get_all_mainstream_tradingview_links():
 def get_tradingview_fallback_message():
     return (
         "⚠️ 即時市場資料服務暫時異常\n\n"
-        "由於價格具有即時性，\n"
-        "系統不會使用過期價格避免誤導。\n\n"
+        "因為價格具有即時性，\n"
+        "系統不會使用超過 5 分鐘的舊價格避免誤導。\n\n"
         "你可以先查看 TradingView 即時行情：\n\n"
         f"{get_all_mainstream_tradingview_links()}"
     )
@@ -115,7 +115,7 @@ def get_coin_from_supabase(symbol):
         return None
 
     if not _is_market_data_fresh(coin_data.get("updated_at")):
-        print("[SupabaseData] market_data 已過期，改用即時 API。")
+        print(f"[Freshness] Supabase {normalized_symbol} 資料超過 5 分鐘，視為過期。")
         return None
 
     result = dict(coin_data)
@@ -178,7 +178,7 @@ def get_coin_from_local_data(symbol):
         return None
 
     if not _is_market_data_fresh(coin_data.get("updated_at")):
-        print("[LocalData] market_data.json 已過期，所以改用即時 API。")
+        print(f"[Freshness] JSON {str(coin_data.get('symbol', normalized_symbol)).strip().upper()} 資料超過 5 分鐘，視為過期。")
         print("[LocalData] 是否找到資料：False")
         return None
 
@@ -248,6 +248,51 @@ def _save_price_cache(normalized_symbol, result, timestamp):
         "data": result,
         "timestamp": timestamp,
     }
+
+
+def _save_realtime_market_data(normalized_symbol, result):
+    """即時 API 成功後，同步更新 Supabase 和本地 JSON 快取。"""
+
+    if result is None or isinstance(result, str):
+        return
+
+    try:
+        from database_manager import upsert_market_data
+
+        upsert_market_data(
+            {
+                "name": result["name"],
+                "symbol": result["symbol"],
+                "price_usd": result["price_usd"],
+                "change_24h": result["change_24h"],
+                "updated_at": result["updated_at"],
+            }
+        )
+    except Exception as error:
+        print(f"[CryptoAPI] 即時資料寫入 Supabase 失敗：{error}")
+
+    try:
+        if LOCAL_MARKET_DATA_FILE.exists() and LOCAL_MARKET_DATA_FILE.stat().st_size > 0:
+            with LOCAL_MARKET_DATA_FILE.open("r", encoding="utf-8") as file:
+                market_data = json.load(file)
+            if not isinstance(market_data, dict):
+                market_data = {}
+        else:
+            market_data = {}
+
+        market_data[normalized_symbol] = {
+            "name": result["name"],
+            "symbol": result["symbol"],
+            "price_usd": result["price_usd"],
+            "change_24h": result["change_24h"],
+            "updated_at": result["updated_at"],
+        }
+
+        LOCAL_MARKET_DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with LOCAL_MARKET_DATA_FILE.open("w", encoding="utf-8") as file:
+            json.dump(market_data, file, ensure_ascii=False, indent=2)
+    except (OSError, json.JSONDecodeError, KeyError) as error:
+        print(f"[CryptoAPI] 即時資料寫入 JSON fallback 失敗：{error}")
 
 
 def _get_coin_price_from_coingecko(coin):
@@ -391,12 +436,14 @@ def get_coin_price(symbol):
     result = _get_coin_price_from_coingecko(coin)
     if result is not None:
         _save_price_cache(normalized_symbol, result, now)
+        _save_realtime_market_data(normalized_symbol, result)
         _print_final_source("CoinGecko")
         return result
 
     backup_result = _get_coin_price_from_coincap(normalized_symbol)
     if backup_result is not None:
         _save_price_cache(normalized_symbol, backup_result, now)
+        _save_realtime_market_data(normalized_symbol, backup_result)
         _print_final_source(BACKUP_API_NAME)
         return backup_result
 

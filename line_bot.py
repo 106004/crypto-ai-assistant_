@@ -198,20 +198,32 @@ def _handle_mycoin(user_id, reply_token):
 def _handle_coin_price(reply_token, user_text):
     """處理 10 種支援幣的查價指令。"""
 
+    normalized_symbol = str(user_text).strip().lower()
+    display_symbol = normalized_symbol.upper()
+    print(f"[PriceFlow] 查詢：{display_symbol}")
+
     # 查價優先序：Supabase market_data -> local JSON -> realtime API.
     coin_data = get_coin_from_supabase(user_text)
+    print(f"[PriceFlow] Supabase fresh：{coin_data is not None}")
     if coin_data is None:
         coin_data = get_coin_from_local_data(user_text)
+        print(f"[PriceFlow] JSON fresh：{coin_data is not None}")
     if coin_data is None:
+        print("[PriceFlow] 嘗試即時 API")
         coin_data = get_coin_price(user_text)
 
     if coin_data is None:
+        print("[PriceFlow] 即時 API 失敗，提供 TradingView 連結")
         reply_message(reply_token, get_tradingview_fallback_message())
         return
 
     if isinstance(coin_data, str):
+        print("[PriceFlow] 即時 API 失敗，提供 TradingView 連結")
         reply_message(reply_token, coin_data)
         return
+
+    if coin_data.get("source") not in ("Supabase", "本地 market_data.json"):
+        print("[PriceFlow] 即時 API 成功，不提供 TradingView 連結")
 
     reply_message(reply_token, _format_coin_message(coin_data))
 
