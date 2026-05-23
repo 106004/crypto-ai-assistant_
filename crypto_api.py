@@ -45,31 +45,54 @@ SUPPORTED_COINS = {
 def get_coin_from_local_data(symbol):
     """先從 data/market_data.json 讀幣價；讀不到或檔案壞掉時回傳 None。"""
 
-    # 優先讀本地資料，是為了讓 LINE 使用者查 btc/eth/sol 時可以很快拿到
+    # 優先讀本地資料，是為了讓 LINE 使用者查常用幣種時可以很快拿到
     # market_collector.py 事先整理好的結果，不必每一則訊息都等外部 API 回應。
     # 不要每次都打外部 API，因為 CoinGecko/CoinCap 可能限流、變慢或短暫失敗；
     # 本地檔案可降低 API 壓力，也能讓 Bot 在外部服務不穩時仍有資料可回。
     # market_data.json 是 collector 寫到硬碟的共享市場資料，重開程式還在；
     # price_cache 則是 get_coin_price() 裡的記憶體快取，只活在目前這個 Python 程序。
     normalized_symbol = str(symbol).strip().lower()
+    print("[LocalData] 嘗試讀取 data/market_data.json")
+    print(f"[LocalData] 檔案是否存在：{LOCAL_MARKET_DATA_FILE.exists()}")
 
     if not LOCAL_MARKET_DATA_FILE.exists():
+        print("[LocalData] 找不到 market_data.json，所以改用即時 API。")
+        print("[LocalData] 目前 JSON keys：[]")
+        print(f"[LocalData] 使用者查詢 symbol：{normalized_symbol}")
+        print("[LocalData] 是否找到資料：False")
         return None
 
     try:
         with LOCAL_MARKET_DATA_FILE.open("r", encoding="utf-8") as file:
             market_data = json.load(file)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as error:
+        print(f"[LocalData] 讀取 market_data.json 失敗：{error}")
+        print("[LocalData] 目前 JSON keys：[]")
+        print(f"[LocalData] 使用者查詢 symbol：{normalized_symbol}")
+        print("[LocalData] 是否找到資料：False")
         return None
+
+    if not isinstance(market_data, dict):
+        print("[LocalData] market_data.json 不是物件格式")
+        print("[LocalData] 目前 JSON keys：[]")
+        print(f"[LocalData] 使用者查詢 symbol：{normalized_symbol}")
+        print("[LocalData] 是否找到資料：False")
+        return None
+
+    print(f"[LocalData] 目前 JSON keys：{list(market_data.keys())}")
+    print(f"[LocalData] 使用者查詢 symbol：{normalized_symbol}")
 
     coin_data = market_data.get(normalized_symbol)
     if not isinstance(coin_data, dict):
+        print("[LocalData] 是否找到資料：False")
         return None
 
     required_fields = ("name", "symbol", "price_usd", "change_24h", "updated_at")
     if any(field not in coin_data for field in required_fields):
+        print("[LocalData] 是否找到資料：False")
         return None
 
+    print("[LocalData] 是否找到資料：True")
     result = dict(coin_data)
     result["source"] = "本地 market_data.json"
     return result

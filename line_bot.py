@@ -190,9 +190,9 @@ def _handle_mycoin(user_id, reply_token):
 
 
 def _handle_coin_price(reply_token, user_text):
-    """處理 btc / eth / sol 等查價指令。"""
+    """處理 10 種支援幣的查價指令。"""
 
-    # 先讀本地 market_data.json，讓常用幣種查價更快，也減少外部 API 呼叫次數。
+    # 先讀本地 market_data.json，讓 10 種支援幣查價更快，也減少外部 API 呼叫次數。
     # 如果本地檔案沒有資料，再退回原本的即時 API 查詢流程。
     coin_data = get_coin_from_local_data(user_text)
     if coin_data is None:

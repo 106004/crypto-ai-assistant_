@@ -2,6 +2,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from crypto_api import get_coin_price
 from line_bot import DAILY_MANUAL_TEXT, push_message
+from market_collector import collect_market_data
 from user_manager import get_all_users
 
 
@@ -12,6 +13,7 @@ from user_manager import get_all_users
 # 這裡有兩種推播：
 # 1. 每日提醒：每天早上 9:00 傳一次使用說明，提醒使用者有哪些指令可以用。
 # 2. 每小時幣價：每小時檢查一次使用者最愛幣種，推播該幣種的最新價格。
+# 3. 市場資料更新：每 5 分鐘更新 data/market_data.json，讓 LINE Bot 查價時讀本地檔案。
 _scheduler = None
 
 
@@ -95,6 +97,23 @@ def send_hourly_favorite_coin_price():
         push_message(user_id, message)
 
 
+def update_market_data_job():
+    """排程用：定時更新 data/market_data.json。"""
+
+    # 幣價會一直變，但 LINE Bot 不需要每次查詢都即時打外部 API。
+    # 每 5 分鐘更新一次，對一般提醒和查詢已經夠新，也能降低 CoinGecko 限流風險。
+    print("[Scheduler] 開始更新 market_data.json")
+
+    try:
+        collect_market_data()
+    except Exception as error:
+        # 單次更新失敗不能讓整個 scheduler 停掉；先記錄錯誤，下一輪 5 分鐘後會再試。
+        print(f"[Scheduler] market_data.json 更新失敗：{error}")
+        return
+
+    print("[Scheduler] market_data.json 更新完成")
+
+
 def test_daily_manual():
     """測試用：手動執行每日提醒，不用等到早上 9:00。"""
 
@@ -108,7 +127,7 @@ def test_hourly_favorite_coin_price():
 
 
 def start_scheduler():
-    """啟動每日 9:00 提醒與每小時最愛幣種價格推播。"""
+    """啟動每日 9:00 提醒、每小時最愛幣種推播，以及每 5 分鐘市場資料更新。"""
 
     global _scheduler
 
@@ -138,7 +157,18 @@ def start_scheduler():
         replace_existing=True,
     )
 
+    # 市場資料更新：固定每 5 分鐘抓一次最新資料並寫入 data/market_data.json。
+    # LINE Bot 應該優先讀這個檔案，因為本地檔案回應快、穩定，也能減少外部 API 壓力。
+    print("[Scheduler] 啟動市場資料更新排程：每 5 分鐘")
+    _scheduler.add_job(
+        update_market_data_job,
+        trigger="interval",
+        minutes=5,
+        id="market_data_update_5min",
+        replace_existing=True,
+    )
+
     _scheduler.start()
 
-    print("scheduler 已啟動：每天早上 9:00 推播每日提醒，並且每小時推播最愛幣種價格。")
+    print("scheduler 已啟動：每天早上 9:00 推播每日提醒、每小時推播最愛幣種價格，並且每 5 分鐘更新市場資料。")
     return _scheduler
