@@ -1,15 +1,15 @@
 import json
+from datetime import datetime, timezone
 
 import requests
 
 from config import LINE_CHANNEL_ACCESS_TOKEN
 from crypto_api import (
+    MARKET_DATA_MAX_AGE_SECONDS,
     SUPPORTED_COINS,
-    get_coin_from_local_data,
-    get_coin_from_supabase,
-    get_coin_price,
-    get_tradingview_fallback_message,
+    get_coinglass_fallback_message,
 )
+from database_manager import get_market_data_by_symbol
 from user_manager import get_user, mark_user_onboarded, save_user, update_favorite_coin
 
 
@@ -79,9 +79,7 @@ def _format_coin_message(coin_data):
     change_24h = float(coin_data["change_24h"])
     change_text = f"{change_24h:+.2f}%"
     price_text = f"{float(coin_data['price_usd']):,.2f}"
-    source = coin_data.get("source", "即時 API")
-    if source not in ("Supabase", "本地 market_data.json"):
-        source = "即時 API"
+    source = "Supabase"
     updated_at = coin_data.get("updated_at", "未知")
 
     return (
@@ -91,6 +89,76 @@ def _format_coin_message(coin_data):
         f"updated_at：{updated_at}\n"
         f"資料來源：{source}"
     )
+
+def _parse_market_data_updated_at_utc(updated_at):
+    if isinstance(updated_at, datetime):
+        parsed = updated_at
+    else:
+        value = str(updated_at).strip()
+        if value.endswith("Z"):
+            value = f"{value[:-1]}+00:00"
+        parsed = datetime.fromisoformat(value)
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+
+    return parsed.astimezone(timezone.utc)
+
+
+def _check_supabase_market_data_freshness(symbol, updated_at, now_utc=None):
+    now_utc = now_utc or datetime.now(timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    else:
+        now_utc = now_utc.astimezone(timezone.utc)
+
+    print(f"[Freshness] {symbol} updated_at 原始值：{updated_at}")
+    updated_time = _parse_market_data_updated_at_utc(updated_at)
+    age_seconds = max(0, (now_utc - updated_time).total_seconds())
+    age_minutes = age_seconds / 60
+    fresh = age_seconds <= MARKET_DATA_MAX_AGE_SECONDS
+
+    print(f"[Freshness] {symbol} parsed updated_at UTC：{updated_time.isoformat()}")
+    print(f"[Freshness] 系統現在 UTC：{now_utc.isoformat()}")
+    print(f"[Freshness] 資料年齡：{age_minutes:.1f} 分鐘")
+    print("[Freshness] freshness limit：5 分鐘")
+    print(f"[Freshness] fresh：{fresh}")
+
+    if fresh:
+        print(f"[Freshness] {symbol} 資料新鮮，資料年齡：{age_minutes:.1f} 分鐘")
+    else:
+        print(f"[Freshness] {symbol} 資料已過期，資料年齡：{age_minutes:.1f} 分鐘，超過限制：5 分鐘，放棄使用 Supabase 價格")
+
+    return {
+        "fresh": fresh,
+        "age_seconds": age_seconds,
+        "age_minutes": age_minutes,
+        "updated_at_utc": updated_time,
+        "now_utc": now_utc,
+    }
+
+
+def _get_fresh_supabase_market_data(symbol, now_utc=None):
+    coin_data = get_market_data_by_symbol(symbol)
+    if not isinstance(coin_data, dict):
+        print(f"[Freshness] {symbol} 在 Supabase 沒有資料，提供 CoinGlass fallback links")
+        return None
+
+    try:
+        freshness = _check_supabase_market_data_freshness(symbol, coin_data.get("updated_at"), now_utc=now_utc)
+    except (TypeError, ValueError) as error:
+        print(f"[Freshness] {symbol} updated_at 解析失敗：{error}")
+        print(f"[Freshness] {symbol} 資料已過期，資料年齡：未知，超過限制：5 分鐘，放棄使用 Supabase 價格")
+        return None
+
+    if not freshness["fresh"]:
+        return None
+
+    result = dict(coin_data)
+    result["source"] = "Supabase"
+    result["_age_minutes"] = freshness["age_minutes"]
+    return result
+
 
 def reply_message(reply_token, text):
     """使用 LINE Reply API 回覆文字訊息。"""
@@ -196,38 +264,28 @@ def _handle_mycoin(user_id, reply_token):
 
 
 def _handle_coin_price(reply_token, user_text):
-    """處理 10 種支援幣的查價指令。"""
+    """Handle supported coin price lookup from Supabase market_data only."""
 
-    normalized_symbol = str(user_text).strip().lower()
-    display_symbol = normalized_symbol.upper()
+    display_symbol = str(user_text).strip().upper()
     print(f"[PriceFlow] 查詢：{display_symbol}")
+    print("[PriceFlow] 只查 Supabase")
 
-    # 查價優先序：Supabase market_data -> local JSON -> realtime API.
-    coin_data = get_coin_from_supabase(user_text)
-    print(f"[PriceFlow] Supabase fresh：{coin_data is not None}")
-    if coin_data is None:
-        coin_data = get_coin_from_local_data(user_text)
-        print(f"[PriceFlow] JSON fresh：{coin_data is not None}")
-    if coin_data is None:
-        print("[PriceFlow] 嘗試即時 API")
-        coin_data = get_coin_price(user_text)
+    coin_data = _get_fresh_supabase_market_data(display_symbol)
+    is_fresh = coin_data is not None
+    print(f"[PriceFlow] Supabase fresh：{is_fresh}")
+    if coin_data is not None:
+        print(f"[PriceFlow] 資料年齡：{coin_data.get('_age_minutes', 0):.1f} 分鐘")
+    else:
+        print("[PriceFlow] 資料年齡：未知")
+    print("[PriceFlow] 不使用 JSON fallback")
+    print("[PriceFlow] 不進行即時 API 查詢")
 
-    if coin_data is None:
-        print("[PriceFlow] 即時 API 失敗，提供 TradingView 連結")
-        reply_message(reply_token, get_tradingview_fallback_message())
+    if not is_fresh:
+        print("[PriceFlow] 提供 CoinGlass fallback links")
+        reply_message(reply_token, get_coinglass_fallback_message())
         return
-
-    if isinstance(coin_data, str):
-        print("[PriceFlow] 即時 API 失敗，提供 TradingView 連結")
-        reply_message(reply_token, coin_data)
-        return
-
-    if coin_data.get("source") not in ("Supabase", "本地 market_data.json"):
-        print("[PriceFlow] 即時 API 成功，不提供 TradingView 連結")
 
     reply_message(reply_token, _format_coin_message(coin_data))
-
-
 def handle_webhook(request):
     """處理 LINE webhook request，這是 app.py /callback 會呼叫的入口。"""
 
@@ -294,3 +352,4 @@ def handle_webhook(request):
         reply_message(reply_token, _supported_coin_text())
 
     return "OK"
+

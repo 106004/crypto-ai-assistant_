@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -124,7 +124,7 @@ def collect_market_data():
         print("[MarketCollector] 本次市場更新完成")
         return load_market_data()
 
-    updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    updated_at = datetime.now(timezone.utc).isoformat()
     market_data = {}
 
     for key, coin in TRACKED_COINS.items():
