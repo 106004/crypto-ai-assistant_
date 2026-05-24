@@ -385,6 +385,70 @@ class MarketDataSourceTest(unittest.TestCase):
         print_log.assert_any_call("[PriceFlow] Supabase fresh：False")
         print_log.assert_any_call("[PriceFlow] 提供 CoinGlass fallback links")
 
+    def test_line_bot_analyze_uses_fresh_supabase_data(self):
+        supabase_coin = {
+            "name": "Bitcoin",
+            "symbol": "BTC",
+            "price_usd": 100,
+            "change_24h": 2.3,
+            "updated_at": fresh_timestamp(),
+        }
+
+        with patch.object(line_bot, "get_market_data_by_symbol", return_value=supabase_coin) as get_market_data, patch.object(
+            line_bot, "analyze_market_data", return_value="BTC analysis"
+        ) as analyze_market_data, patch.object(line_bot, "reply_message") as reply_message, patch(
+            "builtins.print"
+        ) as print_log:
+            handled = line_bot._handle_analyze_command("reply-token", "analyze btc")
+
+        self.assertTrue(handled)
+        get_market_data.assert_called_once_with("BTC")
+        analyze_market_data.assert_called_once()
+        reply_message.assert_called_once_with("reply-token", "BTC analysis")
+        print_log.assert_any_call("[Analyze] 收到 analyze 指令：BTC")
+        print_log.assert_any_call("[Analyze] 開始讀取 Supabase market_data")
+        print_log.assert_any_call("[Analyze] freshness check：True")
+        print_log.assert_any_call("[Analyze] 開始市場分析")
+        print_log.assert_any_call("[Analyze] 分析完成")
+
+    def test_line_bot_analyze_missing_data_replies_unavailable_message(self):
+        with patch.object(line_bot, "get_market_data_by_symbol", return_value=None), patch.object(
+            line_bot, "reply_message"
+        ) as reply_message, patch("builtins.print") as print_log:
+            handled = line_bot._handle_analyze_command("reply-token", "analyze btc")
+
+        self.assertTrue(handled)
+        reply_message.assert_called_once_with("reply-token", "目前沒有可用市場資料，\n請稍後再試。")
+        print_log.assert_any_call("[Analyze] 收到 analyze 指令：BTC")
+        print_log.assert_any_call("[Analyze] 開始讀取 Supabase market_data")
+        print_log.assert_any_call("[Analyze] freshness check：False")
+
+    def test_line_bot_analyze_stale_data_replies_stale_message(self):
+        stale_coin = {
+            "name": "Bitcoin",
+            "symbol": "BTC",
+            "price_usd": 100,
+            "change_24h": 2.3,
+            "updated_at": stale_timestamp(),
+        }
+
+        with patch.object(line_bot, "get_market_data_by_symbol", return_value=stale_coin), patch.object(
+            line_bot, "reply_message"
+        ) as reply_message, patch("builtins.print") as print_log:
+            handled = line_bot._handle_analyze_command("reply-token", "analyze btc")
+
+        self.assertTrue(handled)
+        reply_message.assert_called_once_with(
+            "reply-token",
+            "⚠️ 市場資料已過期\n\n"
+            "目前系統不會使用超過 5 分鐘的舊資料進行分析，\n"
+            "避免誤導。\n\n"
+            "請稍後再試。",
+        )
+        print_log.assert_any_call("[Analyze] 收到 analyze 指令：BTC")
+        print_log.assert_any_call("[Analyze] 開始讀取 Supabase market_data")
+        print_log.assert_any_call("[Analyze] freshness check：False")
+
     def test_market_collector_writes_supabase_first_without_json_when_successful(self):
         data = {
             "btc": {

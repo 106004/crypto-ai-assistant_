@@ -22,3 +22,7 @@ LINE_BOT_BASIC_ID = os.getenv("LINE_BOT_BASIC_ID")
 # 讓 Render 重開機或重新部署後，資料不會只留在本機 JSON 檔裡。
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+
+# Gemini API key，用在 market_analyzer.py 產生 AI 市場分析。
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")

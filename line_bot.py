@@ -10,6 +10,7 @@ from crypto_api import (
     get_coinglass_fallback_message,
 )
 from database_manager import get_market_data_by_symbol
+from market_analyzer import analyze_market_data
 from user_manager import get_user, mark_user_onboarded, save_user, update_favorite_coin
 
 
@@ -286,6 +287,61 @@ def _handle_coin_price(reply_token, user_text):
         return
 
     reply_message(reply_token, _format_coin_message(coin_data))
+
+
+def _handle_analyze_command(reply_token, user_text):
+    """Handle analyze btc / analyze eth style market analysis commands."""
+
+    parts = str(user_text).strip().lower().split()
+    if len(parts) != 2 or parts[0] != "analyze":
+        return False
+
+    coin = parts[1]
+    if coin not in SUPPORTED_COINS:
+        reply_message(reply_token, _supported_coin_text())
+        return True
+
+    display_symbol = coin.upper()
+    print(f"[Analyze] 收到 analyze 指令：{display_symbol}")
+    print("[Analyze] 開始讀取 Supabase market_data")
+
+    coin_data = get_market_data_by_symbol(display_symbol)
+    if not isinstance(coin_data, dict):
+        print("[Analyze] freshness check：False")
+        reply_message(reply_token, "目前沒有可用市場資料，\n請稍後再試。")
+        return True
+
+    try:
+        freshness = _check_supabase_market_data_freshness(display_symbol, coin_data.get("updated_at"))
+    except (TypeError, ValueError) as error:
+        print(f"[Analyze] freshness check 失敗：{error}")
+        print("[Analyze] freshness check：False")
+        reply_message(
+            reply_token,
+            "⚠️ 市場資料已過期\n\n"
+            "目前系統不會使用超過 5 分鐘的舊資料進行分析，\n"
+            "避免誤導。\n\n"
+            "請稍後再試。",
+        )
+        return True
+
+    is_fresh = bool(freshness["fresh"])
+    print(f"[Analyze] freshness check：{is_fresh}")
+    if not is_fresh:
+        reply_message(
+            reply_token,
+            "⚠️ 市場資料已過期\n\n"
+            "目前系統不會使用超過 5 分鐘的舊資料進行分析，\n"
+            "避免誤導。\n\n"
+            "請稍後再試。",
+        )
+        return True
+
+    print("[Analyze] 開始市場分析")
+    analysis_text = analyze_market_data(coin_data)
+    print("[Analyze] 分析完成")
+    reply_message(reply_token, analysis_text)
+    return True
 def handle_webhook(request):
     """處理 LINE webhook request，這是 app.py /callback 會呼叫的入口。"""
 
@@ -343,6 +399,9 @@ def handle_webhook(request):
 
         if user_text == "mycoin":
             _handle_mycoin(user_id, reply_token)
+            continue
+
+        if _handle_analyze_command(reply_token, user_text):
             continue
 
         if user_text in SUPPORTED_COINS:

@@ -5,3 +5,4 @@ apscheduler
 line-bot-sdk
 supabase
 gunicorn
+google-genai
