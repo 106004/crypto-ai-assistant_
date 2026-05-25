@@ -38,7 +38,7 @@ class AppSchedulerStartupTest(unittest.TestCase):
         with patch("scheduler.start_scheduler"):
             app_module = importlib.import_module("app")
 
-        with patch.object(app_module, "collect_market_data") as collect_market_data, patch(
+        with patch("routes.cron.run_market_update_job") as run_market_update_job, patch(
             "builtins.print"
         ) as print_log:
             response = app_module.app.test_client().get("/update-market-data")
@@ -48,9 +48,10 @@ class AppSchedulerStartupTest(unittest.TestCase):
             response.get_json(),
             {"status": "success", "message": "market data updated"},
         )
-        collect_market_data.assert_called_once_with()
-        print_log.assert_any_call("[ExternalCron] 開始更新")
-        print_log.assert_any_call("[ExternalCron] 市場資料更新成功")
+        run_market_update_job.assert_called_once_with()
+        print_log.assert_any_call("[Route] /update-market-data called")
+        print_log.assert_any_call("[Route] cron route complete")
+        print_log.assert_any_call("[ExternalCron] market update success")
 
     def test_update_market_data_endpoint_does_not_return_collected_market_data(self):
         sys.modules.pop("app", None)
@@ -69,7 +70,7 @@ class AppSchedulerStartupTest(unittest.TestCase):
         with patch("scheduler.start_scheduler"):
             app_module = importlib.import_module("app")
 
-        with patch.object(app_module, "collect_market_data", return_value=large_market_data), patch(
+        with patch("routes.cron.run_market_update_job", return_value=large_market_data), patch(
             "builtins.print"
         ):
             response = app_module.app.test_client().get("/update-market-data")
@@ -88,8 +89,8 @@ class AppSchedulerStartupTest(unittest.TestCase):
         with patch("scheduler.start_scheduler"):
             app_module = importlib.import_module("app")
 
-        with patch.object(
-            app_module, "collect_market_data", side_effect=RuntimeError("db down")
+        with patch(
+            "routes.cron.run_market_update_job", side_effect=RuntimeError("db down")
         ), patch("builtins.print") as print_log:
             response = app_module.app.test_client().get("/update-market-data")
 
@@ -98,7 +99,7 @@ class AppSchedulerStartupTest(unittest.TestCase):
             response.get_json(),
             {"status": "error", "message": "db down"},
         )
-        print_log.assert_any_call("[ExternalCron] 市場資料更新失敗：db down")
+        print_log.assert_any_call("[ExternalCron][ERROR] market update failed: db down")
 
 
 if __name__ == "__main__":

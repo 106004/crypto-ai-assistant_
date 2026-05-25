@@ -1,7 +1,12 @@
 from datetime import datetime, timezone
 
+from config.settings import MAX_MARKET_DATA_AGE_SECONDS
+from services.market.freshness_service import (
+    is_market_data_fresh as _is_market_data_fresh_service,
+)
 
-MARKET_DATA_MAX_AGE_SECONDS = 5 * 60
+
+MARKET_DATA_MAX_AGE_SECONDS = MAX_MARKET_DATA_AGE_SECONDS
 
 SUPPORTED_COINS = {
     "btc": {"id": "bitcoin", "name": "Bitcoin", "symbol": "BTC"},
@@ -60,37 +65,8 @@ def get_coinglass_fallback_message():
 
 
 def _is_market_data_fresh(symbol, updated_at):
-    if isinstance(updated_at, datetime):
-        updated_time = updated_at
-    else:
-        value = str(updated_at).strip()
-        if value.endswith("Z"):
-            value = f"{value[:-1]}+00:00"
-        updated_time = datetime.fromisoformat(value)
-
-    if updated_time.tzinfo is None:
-        updated_time = updated_time.replace(tzinfo=timezone.utc)
-    else:
-        updated_time = updated_time.astimezone(timezone.utc)
-
-    now_utc = datetime.now(timezone.utc)
-    age_seconds = max(0, (now_utc - updated_time).total_seconds())
-    age_minutes = age_seconds / 60
-    fresh = age_seconds <= MARKET_DATA_MAX_AGE_SECONDS
-
-    print(f"[Freshness] {symbol} updated_at 原始值：{updated_at}")
-    print(f"[Freshness] {symbol} parsed updated_at UTC：{updated_time.isoformat()}")
-    print(f"[Freshness] 系統現在 UTC：{now_utc.isoformat()}")
-    print(f"[Freshness] 資料年齡：{age_minutes:.1f} 分鐘")
-    print("[Freshness] freshness limit：5 分鐘")
-    print(f"[Freshness] fresh：{fresh}")
-
-    if fresh:
-        print(f"[Freshness] {symbol} 資料新鮮，資料年齡：{age_minutes:.1f} 分鐘")
-    else:
-        print(f"[Freshness] {symbol} 資料已過期，資料年齡：{age_minutes:.1f} 分鐘，超過限制：5 分鐘，放棄使用 Supabase 價格")
-
-    return fresh
+    market_data = {"symbol": symbol, "updated_at": updated_at}
+    return _is_market_data_fresh_service(market_data)
 
 
 def get_coin_from_supabase(symbol):

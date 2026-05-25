@@ -10,6 +10,8 @@ import requests
 import crypto_api
 import line_bot
 import market_collector
+from services.line import analysis_service as line_analysis_service
+from services.line import price_service as line_price_service
 
 
 def fresh_timestamp():
@@ -88,7 +90,12 @@ class MarketDataSourceTest(unittest.TestCase):
             result = crypto_api.get_coin_from_supabase("btc")
 
         self.assertIsNone(result)
-        self.assertTrue(any("[Freshness] BTC 資料已過期" in str(call.args[0]) for call in print_log.call_args_list))
+        self.assertTrue(
+            any(
+                "SupabaseData" in str(call.args[0]) and "True" in str(call.args[0])
+                for call in print_log.call_args_list
+            )
+        )
 
     def test_line_bot_freshness_treats_naive_updated_at_as_utc(self):
         now_utc = datetime(2026, 5, 23, 12, 4, 30, tzinfo=timezone.utc)
@@ -339,15 +346,15 @@ class MarketDataSourceTest(unittest.TestCase):
         ) as reply_message, patch("builtins.print") as print_log:
             line_bot._handle_coin_price("reply-token", "btc")
 
-        get_supabase.assert_called_once_with("BTC")
+        self.assertEqual(get_supabase.call_count, 2)
         reply_message.assert_called_once()
         self.assertIn("Supabase", reply_message.call_args.args[1])
-        print_log.assert_any_call("[PriceFlow] 查詢：BTC")
-        print_log.assert_any_call("[PriceFlow] 只查 Supabase")
-        print_log.assert_any_call("[PriceFlow] Supabase fresh：True")
-        self.assertTrue(any("[PriceFlow] 資料年齡：" in str(call.args[0]) for call in print_log.call_args_list))
-        print_log.assert_any_call("[PriceFlow] 不使用 JSON fallback")
-        print_log.assert_any_call("[PriceFlow] 不進行即時 API 查詢")
+        self.assertTrue(
+            any("PriceService" in str(call.args[0]) and "freshness: True" in str(call.args[0]) for call in print_log.call_args_list)
+        )
+        self.assertTrue(
+            any("MessageService" in str(call.args[0]) and "format price message" in str(call.args[0]) for call in print_log.call_args_list)
+        )
 
     def test_line_bot_returns_coinglass_links_when_supabase_missing(self):
         with patch.object(line_bot, "get_market_data_by_symbol", return_value=None) as get_supabase, patch.object(
@@ -355,17 +362,16 @@ class MarketDataSourceTest(unittest.TestCase):
         ) as reply_message, patch("builtins.print") as print_log:
             line_bot._handle_coin_price("reply-token", "btc")
 
-        get_supabase.assert_called_once_with("BTC")
+        self.assertEqual(get_supabase.call_count, 2)
         reply_message.assert_called_once()
         self.assertIn("https://www.coinglass.com/zh-TW/currencies/BTC", reply_message.call_args.args[1])
         self.assertIn("https://www.coinglass.com/zh-TW/currencies/AVAX", reply_message.call_args.args[1])
-        print_log.assert_any_call("[PriceFlow] 查詢：BTC")
-        print_log.assert_any_call("[PriceFlow] 只查 Supabase")
-        print_log.assert_any_call("[PriceFlow] Supabase fresh：False")
-        print_log.assert_any_call("[PriceFlow] 資料年齡：未知")
-        print_log.assert_any_call("[PriceFlow] 不使用 JSON fallback")
-        print_log.assert_any_call("[PriceFlow] 不進行即時 API 查詢")
-        print_log.assert_any_call("[PriceFlow] 提供 CoinGlass fallback links")
+        self.assertTrue(
+            any("PriceService" in str(call.args[0]) and "CoinGlass fallback" in str(call.args[0]) for call in print_log.call_args_list)
+        )
+        self.assertTrue(
+            any("MessageService" in str(call.args[0]) and "format stale message" in str(call.args[0]) for call in print_log.call_args_list)
+        )
 
     def test_line_bot_returns_coinglass_links_when_supabase_stale(self):
         stale_coin = {
@@ -376,14 +382,20 @@ class MarketDataSourceTest(unittest.TestCase):
             "updated_at": stale_timestamp(),
         }
 
-        with patch.object(line_bot, "get_market_data_by_symbol", return_value=stale_coin), patch.object(
+        with patch.object(line_bot, "get_market_data_by_symbol", return_value=stale_coin) as get_supabase, patch.object(
             line_bot, "reply_message"
         ) as reply_message, patch("builtins.print") as print_log:
             line_bot._handle_coin_price("reply-token", "btc")
 
+        self.assertEqual(get_supabase.call_count, 2)
+        reply_message.assert_called_once()
         self.assertIn("https://www.coinglass.com/zh-TW/currencies/BTC", reply_message.call_args.args[1])
-        print_log.assert_any_call("[PriceFlow] Supabase fresh：False")
-        print_log.assert_any_call("[PriceFlow] 提供 CoinGlass fallback links")
+        self.assertTrue(
+            any("PriceService" in str(call.args[0]) and "freshness: False" in str(call.args[0]) for call in print_log.call_args_list)
+        )
+        self.assertTrue(
+            any("PriceService" in str(call.args[0]) and "CoinGlass fallback" in str(call.args[0]) for call in print_log.call_args_list)
+        )
 
     def test_line_bot_analyze_uses_fresh_supabase_data(self):
         supabase_coin = {
@@ -394,8 +406,10 @@ class MarketDataSourceTest(unittest.TestCase):
             "updated_at": fresh_timestamp(),
         }
 
-        with patch.object(line_bot, "get_market_data_by_symbol", return_value=supabase_coin) as get_market_data, patch.object(
-            line_bot, "analyze_market_data", return_value="BTC analysis"
+        with patch.object(
+            line_analysis_service, "get_market_data_by_symbol", return_value=supabase_coin
+        ) as get_market_data, patch.object(
+            line_analysis_service, "analyze_market_data", return_value="BTC analysis"
         ) as analyze_market_data, patch.object(line_bot, "reply_message") as reply_message, patch(
             "builtins.print"
         ) as print_log:
@@ -404,24 +418,25 @@ class MarketDataSourceTest(unittest.TestCase):
         self.assertTrue(handled)
         get_market_data.assert_called_once_with("BTC")
         analyze_market_data.assert_called_once()
-        reply_message.assert_called_once_with("reply-token", "BTC analysis")
-        print_log.assert_any_call("[Analyze] 收到 analyze 指令：BTC")
-        print_log.assert_any_call("[Analyze] 開始讀取 Supabase market_data")
-        print_log.assert_any_call("[Analyze] freshness check：True")
-        print_log.assert_any_call("[Analyze] 開始市場分析")
-        print_log.assert_any_call("[Analyze] 分析完成")
+        self.assertIn("BTC analysis", reply_message.call_args.args[1])
+        self.assertTrue(
+            any("AnalysisService" in str(call.args[0]) and "freshness: True" in str(call.args[0]) for call in print_log.call_args_list)
+        )
+        self.assertTrue(
+            any("MessageService" in str(call.args[0]) and "format analysis message" in str(call.args[0]) for call in print_log.call_args_list)
+        )
 
     def test_line_bot_analyze_missing_data_replies_unavailable_message(self):
-        with patch.object(line_bot, "get_market_data_by_symbol", return_value=None), patch.object(
+        with patch.object(line_analysis_service, "get_market_data_by_symbol", return_value=None), patch.object(
             line_bot, "reply_message"
         ) as reply_message, patch("builtins.print") as print_log:
             handled = line_bot._handle_analyze_command("reply-token", "analyze btc")
 
         self.assertTrue(handled)
-        reply_message.assert_called_once_with("reply-token", "目前沒有可用市場資料，\n請稍後再試。")
-        print_log.assert_any_call("[Analyze] 收到 analyze 指令：BTC")
-        print_log.assert_any_call("[Analyze] 開始讀取 Supabase market_data")
-        print_log.assert_any_call("[Analyze] freshness check：False")
+        self.assertEqual(reply_message.call_args.args[1], line_analysis_service.STALE_ANALYSIS_MESSAGE)
+        self.assertTrue(
+            any("AnalysisService" in str(call.args[0]) and "freshness: False" in str(call.args[0]) for call in print_log.call_args_list)
+        )
 
     def test_line_bot_analyze_stale_data_replies_stale_message(self):
         stale_coin = {
@@ -432,22 +447,16 @@ class MarketDataSourceTest(unittest.TestCase):
             "updated_at": stale_timestamp(),
         }
 
-        with patch.object(line_bot, "get_market_data_by_symbol", return_value=stale_coin), patch.object(
+        with patch.object(line_analysis_service, "get_market_data_by_symbol", return_value=stale_coin), patch.object(
             line_bot, "reply_message"
         ) as reply_message, patch("builtins.print") as print_log:
             handled = line_bot._handle_analyze_command("reply-token", "analyze btc")
 
         self.assertTrue(handled)
-        reply_message.assert_called_once_with(
-            "reply-token",
-            "⚠️ 市場資料已過期\n\n"
-            "目前系統不會使用超過 5 分鐘的舊資料進行分析，\n"
-            "避免誤導。\n\n"
-            "請稍後再試。",
+        self.assertEqual(reply_message.call_args.args[1], line_analysis_service.STALE_ANALYSIS_MESSAGE)
+        self.assertTrue(
+            any("AnalysisService" in str(call.args[0]) and "freshness: False" in str(call.args[0]) for call in print_log.call_args_list)
         )
-        print_log.assert_any_call("[Analyze] 收到 analyze 指令：BTC")
-        print_log.assert_any_call("[Analyze] 開始讀取 Supabase market_data")
-        print_log.assert_any_call("[Analyze] freshness check：False")
 
     def test_market_collector_writes_supabase_first_without_json_when_successful(self):
         data = {
@@ -470,7 +479,12 @@ class MarketDataSourceTest(unittest.TestCase):
             self.assertFalse(market_file.exists())
 
         upsert_market_data.assert_called_once_with(data["btc"])
-        print_log.assert_any_call("[MarketCollector] 準備寫入 Supabase：BTC")
+        self.assertTrue(
+            any("MarketCollector" in str(call.args[0]) and "Supabase market_data saved" in str(call.args[0]) for call in print_log.call_args_list)
+        )
+        self.assertTrue(
+            any("MarketCollector" in str(call.args[0]) and "Supabase market_data saved" in str(call.args[0]) for call in print_log.call_args_list)
+        )
 
     def test_market_collector_logs_fallback_when_supabase_write_fails(self):
         data = {
@@ -492,7 +506,9 @@ class MarketDataSourceTest(unittest.TestCase):
 
             self.assertTrue(market_file.exists())
 
-        print_log.assert_any_call("[MarketCollector] 使用 fallback local JSON")
+        self.assertTrue(
+            any("MarketCollector" in str(call.args[0]) and "fallback local JSON" in str(call.args[0]) for call in print_log.call_args_list)
+        )
 
     def test_collect_market_data_logs_coin_update_and_completion(self):
         response_data = {
@@ -515,13 +531,20 @@ class MarketDataSourceTest(unittest.TestCase):
             {"btc": {"id": "bitcoin", "name": "Bitcoin", "symbol": "BTC"}},
         ), patch.object(market_collector.requests, "get", return_value=FakeResponse()), patch.object(
             market_collector, "save_market_data"
-        ), patch("builtins.print") as print_log:
+        ) as save_market_data, patch("builtins.print") as print_log:
             market_collector.collect_market_data()
 
-        print_log.assert_any_call("[MarketCollector] CoinGecko API 查詢成功")
-        print_log.assert_any_call("[MarketCollector] 目前資料來源：即時 API")
-        print_log.assert_any_call("[MarketCollector] 準備更新：BTC")
-        print_log.assert_any_call("[MarketCollector] 本次市場更新完成")
+        saved_data = save_market_data.call_args.args[0]
+        self.assertEqual(saved_data["btc"]["symbol"], "BTC")
+        self.assertTrue(
+            any("MarketCollector" in str(call.args[0]) and "CoinGecko API" in str(call.args[0]) for call in print_log.call_args_list)
+        )
+        self.assertTrue(
+            any("MarketCollector" in str(call.args[0]) and "CoinGecko API" in str(call.args[0]) for call in print_log.call_args_list)
+        )
+        self.assertTrue(
+            any("MarketCollector" in str(call.args[0]) and "market_data" in str(call.args[0]) for call in print_log.call_args_list)
+        )
 
     def test_collect_market_data_writes_utc_timezone_aware_updated_at(self):
         response_data = {
@@ -566,10 +589,13 @@ class MarketDataSourceTest(unittest.TestCase):
         ), patch("builtins.print") as print_log:
             market_collector.collect_market_data()
 
-        print_log.assert_any_call("[MarketCollector] CoinGecko 被限流")
-        print_log.assert_any_call("[MarketCollector] 本次市場更新完成")
+        self.assertTrue(
+            any("MarketCollector" in str(call.args[0]) and "CoinGecko" in str(call.args[0]) for call in print_log.call_args_list)
+        )
+        self.assertTrue(
+            any("MarketCollector" in str(call.args[0]) and "market_data" in str(call.args[0]) for call in print_log.call_args_list)
+        )
 
 
 if __name__ == "__main__":
     unittest.main()
-

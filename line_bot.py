@@ -9,8 +9,13 @@ from crypto_api import (
     SUPPORTED_COINS,
     get_coinglass_fallback_message,
 )
-from database_manager import get_market_data_by_symbol
+from data.repositories.market_data_repository import get_market_data_by_symbol
 from market_analyzer import analyze_market_data
+from services.line.onboarding_service import handle_mycoin as onboarding_handle_mycoin
+from services.line.onboarding_service import handle_set_coin as onboarding_handle_set_coin
+from services.line.command_router import route_user_message
+from services.line import analysis_service, price_service
+from services.line.message_service import format_analysis_message, format_price_message
 from user_manager import get_user, mark_user_onboarded, save_user, update_favorite_coin
 
 
@@ -268,25 +273,22 @@ def _handle_coin_price(reply_token, user_text):
     """Handle supported coin price lookup from Supabase market_data only."""
 
     display_symbol = str(user_text).strip().upper()
-    print(f"[PriceFlow] 查詢：{display_symbol}")
-    print("[PriceFlow] 只查 Supabase")
+    print(f"[PriceFlow] ???{display_symbol}")
+    print("[PriceFlow] ?? Supabase")
 
     coin_data = _get_fresh_supabase_market_data(display_symbol)
     is_fresh = coin_data is not None
-    print(f"[PriceFlow] Supabase fresh：{is_fresh}")
+    print(f"[PriceFlow] Supabase fresh?{is_fresh}")
     if coin_data is not None:
-        print(f"[PriceFlow] 資料年齡：{coin_data.get('_age_minutes', 0):.1f} 分鐘")
+        print(f"[PriceFlow] ?????{coin_data.get('_age_minutes', 0):.1f} ??")
     else:
-        print("[PriceFlow] 資料年齡：未知")
-    print("[PriceFlow] 不使用 JSON fallback")
-    print("[PriceFlow] 不進行即時 API 查詢")
+        print("[PriceFlow] ???????")
+    print("[PriceFlow] ??? JSON fallback")
+    print("[PriceFlow] ????? API ??")
 
-    if not is_fresh:
-        print("[PriceFlow] 提供 CoinGlass fallback links")
-        reply_message(reply_token, get_coinglass_fallback_message())
-        return
-
-    reply_message(reply_token, _format_coin_message(coin_data))
+    price_service.get_market_data_by_symbol = get_market_data_by_symbol
+    reply_text = price_service.handle_price_query(display_symbol)
+    reply_message(reply_token, reply_text)
 
 
 def _handle_analyze_command(reply_token, user_text):
@@ -302,46 +304,13 @@ def _handle_analyze_command(reply_token, user_text):
         return True
 
     display_symbol = coin.upper()
-    print(f"[Analyze] 收到 analyze 指令：{display_symbol}")
-    print("[Analyze] 開始讀取 Supabase market_data")
+    print(f"[Analyze] ?? analyze ???{display_symbol}")
+    print("[Analyze] ???? Supabase market_data")
 
-    coin_data = get_market_data_by_symbol(display_symbol)
-    if not isinstance(coin_data, dict):
-        print("[Analyze] freshness check：False")
-        reply_message(reply_token, "目前沒有可用市場資料，\n請稍後再試。")
-        return True
-
-    try:
-        freshness = _check_supabase_market_data_freshness(display_symbol, coin_data.get("updated_at"))
-    except (TypeError, ValueError) as error:
-        print(f"[Analyze] freshness check 失敗：{error}")
-        print("[Analyze] freshness check：False")
-        reply_message(
-            reply_token,
-            "⚠️ 市場資料已過期\n\n"
-            "目前系統不會使用超過 5 分鐘的舊資料進行分析，\n"
-            "避免誤導。\n\n"
-            "請稍後再試。",
-        )
-        return True
-
-    is_fresh = bool(freshness["fresh"])
-    print(f"[Analyze] freshness check：{is_fresh}")
-    if not is_fresh:
-        reply_message(
-            reply_token,
-            "⚠️ 市場資料已過期\n\n"
-            "目前系統不會使用超過 5 分鐘的舊資料進行分析，\n"
-            "避免誤導。\n\n"
-            "請稍後再試。",
-        )
-        return True
-
-    print("[Analyze] 開始市場分析")
-    analysis_text = analyze_market_data(coin_data)
-    print("[Analyze] 分析完成")
+    analysis_text = analysis_service.handle_analysis_query(display_symbol)
     reply_message(reply_token, analysis_text)
     return True
+
 def handle_webhook(request):
     """處理 LINE webhook request，這是 app.py /callback 會呼叫的入口。"""
 
@@ -394,11 +363,16 @@ def handle_webhook(request):
             print("這筆 event 不是文字訊息，或文字內容是空的。")
             continue
 
+        routed_reply = route_user_message(user_text)
+        if routed_reply is not None:
+            reply_message(reply_token, routed_reply)
+            continue
+
         if _handle_set_coin(user_id, reply_token, user_text):
             continue
 
         if user_text == "mycoin":
-            _handle_mycoin(user_id, reply_token)
+            reply_message(reply_token, onboarding_handle_mycoin(user_id))
             continue
 
         if _handle_analyze_command(reply_token, user_text):

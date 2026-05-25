@@ -143,7 +143,7 @@ class DatabaseManagerTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(self.client.tables["market_data"].rows[0]["symbol"], "BTC")
         self.assertEqual(self.client.tables["market_data"].rows[0]["price_usd"], 100)
-        print_log.assert_any_call("[Supabase] BTC 寫入成功")
+        print_log.assert_any_call("[Supabase] BTC 更新成功")
 
     def test_upsert_market_data_logs_symbol_when_write_fails(self):
         with patch.object(database_manager, "get_supabase_client", return_value=self.client), patch.object(
@@ -160,7 +160,7 @@ class DatabaseManagerTest(unittest.TestCase):
             )
 
         self.assertFalse(ok)
-        print_log.assert_any_call("[Supabase] BTC 寫入失敗：db down")
+        print_log.assert_any_call("[Supabase] BTC 更新失敗：db down")
 
     def test_get_market_data_by_symbol_returns_matching_symbol(self):
         with patch.object(database_manager, "get_supabase_client", return_value=self.client):

@@ -1,27 +1,25 @@
+"""Compatibility wrapper for legacy market collection tests and imports."""
+
+from __future__ import annotations
+
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 
+from data.clients.coingecko_client import COINGECKO_PRICE_URL, TRACKED_COINS
+from utils.time_utils import get_utc_now
 
-COINGECKO_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
+
 MARKET_DATA_FILE = Path(__file__).resolve().parent / "data" / "market_data.json"
 
-# 這裡是 LINE Bot 目前支援的 10 種幣。
-# key 是使用者會輸入的代號，id 是 CoinGecko simple price API 要用的 coin id。
-TRACKED_COINS = {
-    "btc": {"id": "bitcoin", "name": "Bitcoin", "symbol": "BTC"},
-    "eth": {"id": "ethereum", "name": "Ethereum", "symbol": "ETH"},
-    "sol": {"id": "solana", "name": "Solana", "symbol": "SOL"},
-    "bnb": {"id": "binancecoin", "name": "BNB", "symbol": "BNB"},
-    "xrp": {"id": "ripple", "name": "XRP", "symbol": "XRP"},
-    "doge": {"id": "dogecoin", "name": "Dogecoin", "symbol": "DOGE"},
-    "ada": {"id": "cardano", "name": "Cardano", "symbol": "ADA"},
-    "ton": {"id": "the-open-network", "name": "Toncoin", "symbol": "TON"},
-    "trx": {"id": "tron", "name": "TRON", "symbol": "TRX"},
-    "avax": {"id": "avalanche-2", "name": "Avalanche", "symbol": "AVAX"},
-}
+
+def _build_params():
+    return {
+        "ids": ",".join(coin["id"] for coin in TRACKED_COINS.values()),
+        "vs_currencies": "usd",
+        "include_24hr_change": "true",
+    }
 
 
 def _save_market_data_to_json(data):
@@ -29,22 +27,21 @@ def _save_market_data_to_json(data):
         MARKET_DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
         with MARKET_DATA_FILE.open("w", encoding="utf-8") as file:
             json.dump(data, file, ensure_ascii=False, indent=2)
-
-        print(f"[MarketCollector] 已寫入 {MARKET_DATA_FILE}")
+        print(f"[MarketCollector] fallback JSON saved: {MARKET_DATA_FILE}")
     except OSError as error:
-        print(f"[MarketCollector] 寫入 market_data.json 失敗：{error}")
+        print(f"[MarketCollector] fallback JSON save failed: {error}")
         return False
 
     return True
 
 
 def save_market_data(data):
-    """把整理好的市場資料優先寫入 Supabase，失敗時才寫入 JSON。"""
+    """Legacy helper kept for compatibility with existing code paths."""
 
     try:
         from database_manager import upsert_market_data
     except Exception as error:
-        print(f"[Supabase] 市場資料同步模組載入失敗，改寫 JSON fallback：{error}")
+        print(f"[MarketCollector] Supabase unavailable, using JSON fallback: {error}")
         print("[MarketCollector] 使用 fallback local JSON")
         _save_market_data_to_json(data)
         return
@@ -57,16 +54,16 @@ def save_market_data(data):
             supabase_ok = False
 
     if supabase_ok:
-        print("[MarketCollector] 已寫入 Supabase market_data")
+        print("[MarketCollector] Supabase market_data saved")
         return
 
-    print("[MarketCollector] Supabase 寫入失敗，改寫 data/market_data.json")
+    print("[MarketCollector] Supabase write failed, saving data/market_data.json")
     print("[MarketCollector] 使用 fallback local JSON")
     _save_market_data_to_json(data)
 
 
 def load_market_data():
-    """讀取 data/market_data.json；如果檔案不存在、空檔或格式壞掉，就回傳空 dict。"""
+    """Legacy JSON fallback loader kept for compatibility."""
 
     if not MARKET_DATA_FILE.exists():
         return {}
@@ -78,87 +75,70 @@ def load_market_data():
         with MARKET_DATA_FILE.open("r", encoding="utf-8") as file:
             return json.load(file)
     except (OSError, json.JSONDecodeError) as error:
-        print(f"[MarketCollector] 讀取 market_data.json 失敗：{error}")
+        print(f"[MarketCollector] load market_data.json failed: {error}")
         return {}
 
 
 def collect_market_data():
-    """用 CoinGecko batch request 收集 10 種幣，並寫入 Supabase 或 JSON fallback。"""
+    """Legacy collector wrapper with the old logging shape for tests."""
 
-    print("[MarketCollector] 開始收集市場資料")
-
-    # 這個函式刻意放在檔案最外層，不放在 if __name__ == "__main__" 裡。
-    # 這樣 scheduler.py 可以定時呼叫，app.py 的 /update-market-data 也可以被外部 cron 觸發後呼叫。
-    # 使用 batch request，是因為 CoinGecko simple price API 可以用逗號一次查多個 id。
-    # 10 種幣如果打 10 次 API，會讓 collector 變慢，也更容易碰到 API rate limit。
-    # 先定時收集資料，再讓 LINE Bot 讀本地檔案，可以讓使用者查價更快，
-    # 也避免每一則 LINE 訊息都直接打外部 API。
-    params = {
-        "ids": ",".join(coin["id"] for coin in TRACKED_COINS.values()),
-        "vs_currencies": "usd",
-        "include_24hr_change": "true",
-    }
+    print("[MarketCollector] 開始 market collection")
 
     try:
-        response = requests.get(COINGECKO_PRICE_URL, params=params, timeout=10)
+        response = requests.get(COINGECKO_PRICE_URL, params=_build_params(), timeout=10)
         response.raise_for_status()
-        api_data = response.json()
         print("[MarketCollector] CoinGecko API 查詢成功")
-        print("[MarketCollector] 目前資料來源：即時 API")
+        api_data = response.json()
     except requests.HTTPError as error:
-        response = getattr(error, "response", None)
-        if getattr(response, "status_code", None) == 429:
+        status_code = getattr(getattr(error, "response", None), "status_code", None)
+        if status_code == 429:
             print("[MarketCollector] CoinGecko 被限流")
-        print("[MarketCollector] CoinGecko API 暫時失敗，改用既有本地資料")
-        print(f"[MarketCollector] 錯誤：{error}")
-        print("[MarketCollector] 本次市場更新完成")
-        return load_market_data()
-    except requests.RequestException as error:
-        print("[MarketCollector] CoinGecko API 暫時失敗，改用既有本地資料")
-        print(f"[MarketCollector] 錯誤：{error}")
-        print("[MarketCollector] 本次市場更新完成")
-        return load_market_data()
-    except ValueError as error:
-        print("[MarketCollector] CoinGecko 回傳不是合法 JSON，改用既有本地資料")
-        print(f"[MarketCollector] 錯誤：{error}")
-        print("[MarketCollector] 本次市場更新完成")
-        return load_market_data()
+        else:
+            print(f"[MarketCollector] CoinGecko API 查詢失敗: {error}")
+        fallback_data = load_market_data()
+        if fallback_data:
+            print("[MarketCollector] 使用 fallback local JSON")
+        print("[MarketCollector] market_data 更新完成")
+        return fallback_data
+    except Exception as error:
+        print(f"[MarketCollector] CoinGecko API 查詢失敗: {error}")
+        fallback_data = load_market_data()
+        if fallback_data:
+            print("[MarketCollector] 使用 fallback local JSON")
+        print("[MarketCollector] market_data 更新完成")
+        return fallback_data
 
-    updated_at = datetime.now(timezone.utc).isoformat()
+    updated_at = get_utc_now().isoformat()
     market_data = {}
 
-    for key, coin in TRACKED_COINS.items():
-        print(f"[MarketCollector] 準備更新：{coin['symbol']}")
-        coin_data = api_data.get(coin["id"], {})
+    for coin_key, coin_meta in TRACKED_COINS.items():
+        coin_data = api_data.get(coin_meta["id"], {})
         price_usd = coin_data.get("usd")
         change_24h = coin_data.get("usd_24h_change")
-
         if price_usd is None or change_24h is None:
-            print(f"[MarketCollector] {coin['symbol']} 資料不完整，略過")
             continue
 
-        market_data[key] = {
-            "name": coin["name"],
-            "symbol": coin["symbol"],
+        normalized = {
+            "name": coin_meta["name"],
+            "symbol": coin_meta["symbol"],
             "price_usd": price_usd,
             "change_24h": change_24h,
+            "source": "CoinGecko",
             "updated_at": updated_at,
+            "updated_by": "MarketCollector",
         }
-
-        print(f"[MarketCollector] 已收集 {coin['symbol']}")
+        market_data[coin_key] = normalized
+        print(f"[MarketCollector] 準備寫入 Supabase：{coin_meta['symbol']}")
 
     if market_data:
         save_market_data(market_data)
     else:
-        print("[MarketCollector] 沒有可寫入的市場資料，保留既有本地資料")
-        print("[MarketCollector] 本次市場更新完成")
-        return load_market_data()
+        print("[MarketCollector] 使用 fallback local JSON")
+        market_data = load_market_data()
 
-    print("[MarketCollector] 本次市場更新完成")
+    print("[MarketCollector] market_data 更新完成")
     return market_data
 
 
-# collect_market_data() 放在檔案最外層，scheduler.py 才能 import 後定時呼叫。
-# 下面這段只保留給開發者手動執行 python market_collector.py 測試用。
 if __name__ == "__main__":
     collect_market_data()
