@@ -98,7 +98,7 @@ class SchedulerTest(unittest.TestCase):
 
         get_market_data.assert_called_once_with("BTC")
         push_message.assert_called_once()
-        self.assertIn("Supabase", push_message.call_args.args[1])
+        self.assertIn("CoinGlass", push_message.call_args.args[1])
 
     def test_hourly_favorite_coin_price_pushes_coinglass_when_supabase_missing(self):
         with patch.object(

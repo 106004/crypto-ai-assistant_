@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from user_manager import get_user, mark_user_onboarded, save_user, update_favorite_coin
+from data.repositories.user_repository import get_user, save_user
+from utils.time_utils import get_utc_now
 
 from services.line.message_service import (
     format_daily_guide_message,
@@ -25,6 +26,29 @@ def get_missing_favorite_coin_message():
     return format_missing_favorite_coin_message()
 
 
+def _utc_now_iso():
+    return get_utc_now().isoformat()
+
+
+def _upsert_user(line_user_id, **updates):
+    payload = {
+        "line_user_id": line_user_id,
+        "last_seen_at": _utc_now_iso(),
+    }
+    payload.update({key: value for key, value in updates.items() if value is not None})
+
+    favorite_coin = payload.get("favorite_coin")
+    if favorite_coin is not None:
+        payload["favorite_coin"] = str(favorite_coin).strip().lower()
+
+    onboarded_at = payload.get("onboarded_at")
+    if onboarded_at is not None:
+        payload["onboarded_at"] = str(onboarded_at)
+
+    save_user(payload)
+    return payload
+
+
 def get_onboarding_reply(line_user_id, event_type=None):
     if not line_user_id:
         return None
@@ -35,10 +59,15 @@ def get_onboarding_reply(line_user_id, event_type=None):
     if not needs_welcome:
         return None
 
-    if user is None:
-        save_user(line_user_id)
+    onboarded_at = None
+    if isinstance(user, dict):
+        onboarded_at = user.get("onboarded_at") or None
 
-    mark_user_onboarded(line_user_id)
+    _upsert_user(
+        line_user_id,
+        onboarded=True,
+        onboarded_at=onboarded_at or _utc_now_iso(),
+    )
     print("[Onboarding] welcome sent")
     return get_welcome_message()
 
@@ -57,7 +86,11 @@ def handle_set_coin(line_user_id, symbol):
     if not line_user_id:
         return format_set_coin_success_message(symbol)
 
-    update_favorite_coin(line_user_id, symbol)
+    _upsert_user(
+        line_user_id,
+        favorite_coin=symbol,
+        onboarded=True,
+    )
     print("[Onboarding] favorite coin updated")
     return format_set_coin_success_message(symbol)
 
