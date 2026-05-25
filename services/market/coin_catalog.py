@@ -57,6 +57,15 @@ SUPPORTED_COINS = {
 }
 
 
+def get_coinglass_url(symbol):
+    normalized = str(symbol or "").strip().lower()
+    coin_info = SUPPORTED_COINS.get(normalized)
+    if coin_info is None:
+        return None
+
+    return coin_info.get("coinglass_url")
+
+
 def is_supported_coin(symbol):
     normalized = str(symbol or "").strip().lower()
     supported = normalized in SUPPORTED_COINS

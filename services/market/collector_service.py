@@ -54,6 +54,10 @@ def _load_market_data_from_json():
         return {}
 
 
+def load_market_data():
+    return _load_market_data_from_json()
+
+
 def _normalize_coin(coin_key, coin_meta, coin_data, updated_at):
     price_usd = coin_data.get("usd")
     change_24h = coin_data.get("usd_24h_change")
@@ -72,6 +76,17 @@ def _normalize_coin(coin_key, coin_meta, coin_data, updated_at):
     }
     log_info("CollectorService", f"{coin_meta['symbol']} normalized")
     return normalized
+
+
+def save_market_data(coin_data):
+    normalized = dict(coin_data or {})
+    symbol = str(normalized.get("symbol") or "").strip().upper() or "UNKNOWN"
+    log_info("CollectorService", f"writing {symbol} to Supabase")
+
+    if market_data_repository.save_market_data(normalized):
+        return True
+
+    return False
 
 
 def collect_market_data():
@@ -101,14 +116,14 @@ def collect_market_data():
 
         market_data[coin_key] = normalized
 
-        if market_data_repository.save_market_data(normalized):
+        if save_market_data(normalized):
             log_info("CollectorService", f"{coin_meta['symbol']} saved")
         else:
             supabase_ok = False
 
     if not market_data:
         log_error("CollectorService", "no market data normalized")
-        return _load_market_data_from_json()
+        return load_market_data()
 
     if not supabase_ok:
         log_error("CollectorService", "Supabase save failed, using fallback JSON")

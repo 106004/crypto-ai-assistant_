@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from services.ai import market_analysis_service
-from services.line.analysis_service import STALE_ANALYSIS_MESSAGE, handle_analysis_query
+from services.line.analysis_service import handle_analysis_query
 
 
 class AnalysisServiceTest(unittest.TestCase):
@@ -22,19 +22,15 @@ class AnalysisServiceTest(unittest.TestCase):
             "services.line.analysis_service.get_market_data_by_symbol",
             return_value=market_data,
         ), patch(
-            "services.line.analysis_service.is_market_data_fresh",
-            return_value=True,
-        ), patch(
             "services.line.analysis_service.analyze_market_data",
             return_value="ANALYSIS_TEXT",
         ):
             result = handle_analysis_query("btc")
 
-        self.assertIn("BTC AI 市場分析", result)
+        self.assertIn("BTC AI 分析", result)
         self.assertIn("ANALYSIS_TEXT", result)
-        print("[Test] fresh analysis passed")
 
-    def test_stale_market_data_returns_stale_message(self):
+    def test_stale_market_data_returns_stale_message_and_skips_ai(self):
         now_utc = datetime.now(timezone.utc)
         market_data = {
             "symbol": "BTC",
@@ -49,18 +45,31 @@ class AnalysisServiceTest(unittest.TestCase):
             "services.line.analysis_service.get_market_data_by_symbol",
             return_value=market_data,
         ), patch(
-            "services.line.analysis_service.is_market_data_fresh",
-            return_value=False,
-        ):
+            "services.line.analysis_service.analyze_market_data"
+        ) as analyze_market_data, patch(
+            "builtins.print"
+        ) as print_log:
             result = handle_analysis_query("btc")
 
-        self.assertEqual(result, STALE_ANALYSIS_MESSAGE)
-        print("[Test] stale analysis blocked passed")
+        analyze_market_data.assert_not_called()
+        self.assertIn("⚠️ 資訊超過 5 分鐘，AI 無法分析。", result)
+        self.assertIn("因為價格資料具有即時性", result)
+        self.assertIn("CoinGlass", result)
+        self.assertIn("https://www.coinglass.com/zh-TW/currencies/BTC", result)
+        self.assertTrue(
+            any(
+                "[AnalysisService] market data stale, skip AI analysis" in str(call.args[0])
+                for call in print_log.call_args_list
+            )
+        )
+        self.assertTrue(
+            any(
+                "[AnalysisService] provide CoinGlass link" in str(call.args[0])
+                for call in print_log.call_args_list
+            )
+        )
 
     def test_gemini_failure_falls_back_to_rule_based_analysis(self):
-        class FakeResponse:
-            text = "unused"
-
         class FakeModels:
             def generate_content(self, model, contents):
                 raise RuntimeError("boom")
@@ -89,7 +98,6 @@ class AnalysisServiceTest(unittest.TestCase):
 
         self.assertIn("RULE_BASED_TEXT", result)
         self.assertTrue(result.startswith(market_analysis_service.AI_FALLBACK_PREFIX))
-        print("[Test] Gemini fallback passed")
 
 
 if __name__ == "__main__":

@@ -2,43 +2,70 @@
 
 from __future__ import annotations
 
-from data.repositories.user_repository import get_user, save_user, update_user_coin
+from user_manager import get_user, mark_user_onboarded, save_user, update_favorite_coin
+
+from services.line.message_service import (
+    format_daily_guide_message,
+    format_missing_favorite_coin_message,
+    format_mycoin_message,
+    format_set_coin_success_message,
+    format_welcome_message,
+)
 
 
-WELCOME_MESSAGE = """歡迎使用 Crypto AI Assistant
+def get_welcome_message():
+    return format_welcome_message()
 
-你可以輸入：
 
-btc
-查詢 Bitcoin 價格
+def get_daily_guide_message():
+    return format_daily_guide_message()
 
-eth
-查詢 Ethereum 價格
 
-set btc
-設定你的最愛幣種
+def get_missing_favorite_coin_message():
+    return format_missing_favorite_coin_message()
 
-mycoin
-查看你目前設定的幣種
 
-如果你是第一次使用，先輸入 btc 試試看。"""
+def get_onboarding_reply(line_user_id, event_type=None):
+    if not line_user_id:
+        return None
+
+    user = get_user(line_user_id)
+    needs_welcome = event_type == "follow" or user is None or not bool(user.get("onboarded", False))
+
+    if not needs_welcome:
+        return None
+
+    if user is None:
+        save_user(line_user_id)
+
+    mark_user_onboarded(line_user_id)
+    print("[Onboarding] welcome sent")
+    return get_welcome_message()
 
 
 def handle_new_user(line_user_id):
-    user = get_user(line_user_id)
-    if user is None:
-        save_user({"line_user_id": line_user_id, "favorite_coin": "btc"})
-        print("[Onboarding] new user created")
-    return WELCOME_MESSAGE
+    if not line_user_id:
+        return get_welcome_message()
+
+    reply_text = get_onboarding_reply(line_user_id)
+    if reply_text is None:
+        reply_text = get_welcome_message()
+    return reply_text
 
 
 def handle_set_coin(line_user_id, symbol):
-    update_user_coin(line_user_id, symbol)
+    if not line_user_id:
+        return format_set_coin_success_message(symbol)
+
+    update_favorite_coin(line_user_id, symbol)
     print("[Onboarding] favorite coin updated")
-    return f"✅ 已設定你最愛的幣種為 {str(symbol).strip().upper()}"
+    return format_set_coin_success_message(symbol)
 
 
 def handle_mycoin(line_user_id):
+    if not line_user_id:
+        return get_missing_favorite_coin_message()
+
     user = get_user(line_user_id)
     favorite_coin = ""
     if isinstance(user, dict):
@@ -46,6 +73,6 @@ def handle_mycoin(line_user_id):
 
     print("[Onboarding] mycoin fetched")
     if not favorite_coin:
-        return "你目前還沒有設定最愛幣種。\n請輸入：\nset btc"
+        return get_missing_favorite_coin_message()
 
-    return f"你目前設定的最愛幣種是 {str(favorite_coin).strip().upper()}"
+    return format_mycoin_message(favorite_coin)

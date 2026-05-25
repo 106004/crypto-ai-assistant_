@@ -81,7 +81,7 @@ class SchedulerTest(unittest.TestCase):
             "symbol": "BTC",
             "price_usd": 100,
             "change_24h": 1.5,
-            "updated_at": "now",
+            "updated_at": "2026-05-25T12:00:00+00:00",
             "source": "Supabase",
         }
 
@@ -90,30 +90,31 @@ class SchedulerTest(unittest.TestCase):
             "get_all_users",
             return_value=[{"user_id": "U1", "favorite_coin": "btc"}],
         ), patch.object(
-            scheduler, "get_coin_from_supabase", return_value=supabase_coin
-        ) as get_supabase, patch.object(
+            scheduler, "get_market_data_by_symbol", return_value=supabase_coin
+        ) as get_market_data, patch.object(
             scheduler, "push_message"
         ) as push_message:
             scheduler.send_hourly_favorite_coin_price()
 
-        get_supabase.assert_called_once_with("btc")
+        get_market_data.assert_called_once_with("BTC")
         push_message.assert_called_once()
         self.assertIn("Supabase", push_message.call_args.args[1])
 
-    def test_hourly_favorite_coin_price_skips_when_supabase_missing(self):
+    def test_hourly_favorite_coin_price_pushes_coinglass_when_supabase_missing(self):
         with patch.object(
             scheduler,
             "get_all_users",
             return_value=[{"user_id": "U1", "favorite_coin": "btc"}],
         ), patch.object(
-            scheduler, "get_coin_from_supabase", return_value=None
-        ) as get_supabase, patch.object(
+            scheduler, "get_market_data_by_symbol", return_value=None
+        ) as get_market_data, patch.object(
             scheduler, "push_message"
         ) as push_message:
             scheduler.send_hourly_favorite_coin_price()
 
-        get_supabase.assert_called_once_with("btc")
-        push_message.assert_not_called()
+        get_market_data.assert_called_once_with("BTC")
+        push_message.assert_called_once()
+        self.assertIn("CoinGlass", push_message.call_args.args[1])
 
     @unittest.skip("Old scheduler price flow used JSON/API fallbacks; scheduled LINE pushes now use Supabase only.")
     def test_hourly_favorite_coin_price_falls_back_to_local_before_api(self):

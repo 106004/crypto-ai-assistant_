@@ -25,11 +25,10 @@ class PriceServiceTest(unittest.TestCase):
 
         self.assertIn("Bitcoin (BTC)", result)
         self.assertIn("價格：100.00 USD", result)
-        self.assertIn("24H 漲跌：+1.50%", result)
+        self.assertIn("24H：+1.50%", result)
         self.assertIn("資料來源：Supabase", result)
-        print("[Test] fresh price query passed")
 
-    def test_stale_market_data_returns_coinglass_fallback(self):
+    def test_stale_market_data_returns_single_coinglass_link(self):
         now_utc = datetime.now(timezone.utc)
         market_data = {
             "symbol": "BTC",
@@ -43,27 +42,22 @@ class PriceServiceTest(unittest.TestCase):
         with patch(
             "services.line.price_service.get_market_data_by_symbol",
             return_value=market_data,
-        ), patch(
-            "services.line.message_service.get_coinglass_fallback_message",
-            return_value="COINGLASS_FALLBACK",
         ):
             result = handle_price_query("btc")
 
-        self.assertEqual(result, "COINGLASS_FALLBACK")
-        print("[Test] stale fallback passed")
+        self.assertIn("⚠️ BTC 價格資料超過 5 分鐘", result)
+        self.assertIn("https://www.coinglass.com/zh-TW/currencies/BTC", result)
+        self.assertNotIn("AVAX", result)
 
-    def test_missing_market_data_returns_coinglass_fallback(self):
+    def test_missing_market_data_returns_single_coinglass_link(self):
         with patch(
             "services.line.price_service.get_market_data_by_symbol",
             return_value=None,
-        ), patch(
-            "services.line.message_service.get_coinglass_fallback_message",
-            return_value="COINGLASS_FALLBACK",
         ):
             result = handle_price_query("btc")
 
-        self.assertEqual(result, "COINGLASS_FALLBACK")
-        print("[Test] missing market data passed")
+        self.assertIn("⚠️ BTC 價格資料超過 5 分鐘", result)
+        self.assertIn("https://www.coinglass.com/zh-TW/currencies/BTC", result)
 
 
 if __name__ == "__main__":

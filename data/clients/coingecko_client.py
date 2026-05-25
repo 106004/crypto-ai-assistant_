@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Dict
 
-import importlib
 import requests
 
 from services.market.coin_catalog import SUPPORTED_COINS as CATALOG_SUPPORTED_COINS
@@ -22,14 +21,6 @@ TRACKED_COINS: Dict[str, dict] = {
 }
 
 
-def _get_requests_client():
-    try:
-        market_collector = importlib.import_module("market_collector")
-        return getattr(market_collector, "requests", requests)
-    except Exception:
-        return requests
-
-
 def fetch_market_data(tracked_coins=None, timeout=10):
     coins = tracked_coins or TRACKED_COINS
     params = {
@@ -38,10 +29,9 @@ def fetch_market_data(tracked_coins=None, timeout=10):
         "include_24hr_change": "true",
     }
 
-    print("[CoinGeckoClient] 開始 request")
+    print("[CoinGeckoClient] start request")
     try:
-        requests_client = _get_requests_client()
-        response = requests_client.get(COINGECKO_PRICE_URL, params=params, timeout=timeout)
+        response = requests.get(COINGECKO_PRICE_URL, params=params, timeout=timeout)
         response.raise_for_status()
         print("[CoinGeckoClient] request success")
         return response.json()
