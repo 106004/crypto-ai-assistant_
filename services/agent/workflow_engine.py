@@ -65,6 +65,7 @@ def run_agent_workflow(user_id: str, message: str):
     intent = "unknown"
     coin = ""
     confidence = 0.0
+    workflow_success = False
     try:
         # Step 1: Read the user's current short-term memory first.
         # The decision engine can use this to resolve vague follow-up messages.
@@ -99,6 +100,7 @@ def run_agent_workflow(user_id: str, message: str):
             )
             print("[AgentWorkflow] state updated")
             agent_metrics.record_workflow_success(intent)
+            workflow_success = False
             return {
                 "intent": intent,
                 "blocked": True,
@@ -122,6 +124,7 @@ def run_agent_workflow(user_id: str, message: str):
         )
         print("[AgentWorkflow] state updated")
         agent_metrics.record_workflow_success(intent)
+        workflow_success = True
 
         # Step 8: Return everything the caller may need.
         return {
@@ -138,3 +141,4 @@ def run_agent_workflow(user_id: str, message: str):
     finally:
         latency_ms = (perf_counter() - start_time) * 1000.0
         agent_metrics.record_latency(latency_ms)
+        agent_metrics.record_last_workflow(intent, workflow_success, latency_ms)

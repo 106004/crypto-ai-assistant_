@@ -3,7 +3,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from services.agent.agent_metrics import AGENT_METRICS
+from services.agent.agent_metrics import AGENT_METRICS, reset_agent_metrics
 
 
 class AppCronRoutesTest(unittest.TestCase):
@@ -12,18 +12,18 @@ class AppCronRoutesTest(unittest.TestCase):
 
     def test_metrics_endpoint_returns_agent_metrics(self):
         sys.modules.pop("app", None)
-        original_metrics = {
-            "workflow_success": AGENT_METRICS["workflow_success"],
-            "workflow_failure": AGENT_METRICS["workflow_failure"],
-            "fallback_count": AGENT_METRICS["fallback_count"],
-            "intent_counts": dict(AGENT_METRICS["intent_counts"]),
-            "workflow_latency_ms": list(AGENT_METRICS["workflow_latency_ms"]),
-        }
+        reset_agent_metrics()
         AGENT_METRICS["workflow_success"] = 2
         AGENT_METRICS["workflow_failure"] = 1
         AGENT_METRICS["fallback_count"] = 3
         AGENT_METRICS["intent_counts"] = {"price_query": 4}
         AGENT_METRICS["workflow_latency_ms"] = [10.0, 20.0]
+        AGENT_METRICS["last_workflow"] = {
+            "intent": "price_query",
+            "success": True,
+            "latency_ms": 20.0,
+            "timestamp": "2026-05-26T00:00:00+00:00",
+        }
 
         try:
             app_module = importlib.import_module("app")
@@ -34,19 +34,36 @@ class AppCronRoutesTest(unittest.TestCase):
             self.assertEqual(
                 response.get_json(),
                 {
-                    "workflow_success": 2,
-                    "workflow_failure": 1,
-                    "fallback_count": 3,
-                    "intent_counts": {"price_query": 4},
-                    "workflow_latency_ms": [10.0, 20.0],
+                    "summary": {
+                        "total_workflows": 3,
+                        "workflow_success": 2,
+                        "workflow_failure": 1,
+                        "success_rate": 2 / 3,
+                        "failure_rate": 1 / 3,
+                        "fallback_count": 3,
+                        "fallback_rate": 1.0,
+                    },
+                    "intents": {
+                        "intent_counts": {"price_query": 4},
+                        "top_intents": [{"intent": "price_query", "count": 4}],
+                    },
+                    "latency": {
+                        "avg_latency_ms": 15.0,
+                        "min_latency_ms": 10.0,
+                        "max_latency_ms": 20.0,
+                        "last_latency_ms": 20.0,
+                        "samples": [10.0, 20.0],
+                    },
+                    "last_workflow": {
+                        "intent": "price_query",
+                        "success": True,
+                        "latency_ms": 20.0,
+                        "timestamp": "2026-05-26T00:00:00+00:00",
+                    },
                 },
             )
         finally:
-            AGENT_METRICS["workflow_success"] = original_metrics["workflow_success"]
-            AGENT_METRICS["workflow_failure"] = original_metrics["workflow_failure"]
-            AGENT_METRICS["fallback_count"] = original_metrics["fallback_count"]
-            AGENT_METRICS["intent_counts"] = original_metrics["intent_counts"]
-            AGENT_METRICS["workflow_latency_ms"] = original_metrics["workflow_latency_ms"]
+            reset_agent_metrics()
 
     def test_update_market_data_endpoint_runs_collector(self):
         sys.modules.pop("app", None)
