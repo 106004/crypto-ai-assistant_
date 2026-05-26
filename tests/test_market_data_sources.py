@@ -20,7 +20,7 @@ def fresh_timestamp():
 
 
 def stale_timestamp():
-    return (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat()
+    return (datetime.now(timezone.utc) - timedelta(minutes=7)).isoformat()
 
 
 class MarketDataSourceTest(unittest.TestCase):
@@ -73,8 +73,8 @@ class MarketDataSourceTest(unittest.TestCase):
     def test_all_mainstream_coinglass_links_contains_all_supported_symbols(self):
         links = crypto_api.get_all_mainstream_coinglass_links()
 
-        self.assertIn("BTC：\nhttps://www.coinglass.com/zh-TW/currencies/BTC", links)
-        self.assertIn("AVAX：\nhttps://www.coinglass.com/zh-TW/currencies/AVAX", links)
+        self.assertIn("BTC\nhttps://www.coinglass.com/zh-TW/currencies/BTC", links)
+        self.assertIn("AVAX\nhttps://www.coinglass.com/zh-TW/currencies/AVAX", links)
 
     def test_stale_supabase_data_is_ignored(self):
         db_coin = {

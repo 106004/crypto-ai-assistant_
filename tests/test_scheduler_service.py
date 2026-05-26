@@ -1,7 +1,11 @@
 import unittest
 from unittest.mock import patch
 
+from config.settings import MAX_MARKET_DATA_AGE_SECONDS
 from services.jobs.scheduler_service import run_daily_guide_job, run_favorite_coin_job
+
+
+MARKET_DATA_AGE_MINUTES = MAX_MARKET_DATA_AGE_SECONDS // 60
 
 
 class SchedulerServiceTest(unittest.TestCase):
@@ -44,7 +48,7 @@ class SchedulerServiceTest(unittest.TestCase):
         self.assertTrue(
             any("[FavoriteCoinJob] completed" in str(call.args[0]) for call in print_log.call_args_list)
         )
-        self.assertIn("Supabase", push_message.call_args.args[1])
+        self.assertIn("資料來源：Supabase", push_message.call_args.args[1])
 
     def test_run_favorite_coin_job_pushes_fallback_when_data_missing(self):
         with patch(
@@ -59,7 +63,10 @@ class SchedulerServiceTest(unittest.TestCase):
             run_favorite_coin_job()
 
         push_message.assert_called_once()
-        self.assertIn("⚠️ BTC 價格資料超過 5 分鐘", push_message.call_args.args[1])
+        self.assertIn(
+            f"⚠️ BTC 價格資料超過 {MARKET_DATA_AGE_MINUTES} 分鐘",
+            push_message.call_args.args[1],
+        )
         self.assertIn("https://www.coinglass.com/zh-TW/currencies/BTC", push_message.call_args.args[1])
         self.assertNotIn("AVAX", push_message.call_args.args[1])
         self.assertTrue(

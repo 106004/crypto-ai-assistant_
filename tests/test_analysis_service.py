@@ -2,8 +2,12 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from config.settings import MAX_MARKET_DATA_AGE_SECONDS
 from services.ai import market_analysis_service
 from services.line.analysis_service import handle_analysis_query
+
+
+MARKET_DATA_AGE_MINUTES = MAX_MARKET_DATA_AGE_SECONDS // 60
 
 
 class AnalysisServiceTest(unittest.TestCase):
@@ -38,7 +42,7 @@ class AnalysisServiceTest(unittest.TestCase):
             "price_usd": 100,
             "change_24h": 2.3,
             "source": "Supabase",
-            "updated_at": (now_utc - timedelta(minutes=6)).isoformat(),
+            "updated_at": (now_utc - timedelta(minutes=7)).isoformat(),
         }
 
         with patch(
@@ -52,8 +56,11 @@ class AnalysisServiceTest(unittest.TestCase):
             result = handle_analysis_query("btc")
 
         analyze_market_data.assert_not_called()
-        self.assertIn("⚠️ 資訊超過 5 分鐘，AI 無法分析。", result)
-        self.assertIn("因為價格資料具有即時性", result)
+        self.assertIn(
+            f"⚠️ 資訊超過 {MARKET_DATA_AGE_MINUTES} 分鐘，AI 無法分析。",
+            result,
+        )
+        self.assertIn("目前資料已過期，為避免誤導，系統不會回傳 AI 分析。", result)
         self.assertIn("CoinGlass", result)
         self.assertIn("https://www.coinglass.com/zh-TW/currencies/BTC", result)
         self.assertTrue(

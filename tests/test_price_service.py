@@ -2,7 +2,11 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from config.settings import MAX_MARKET_DATA_AGE_SECONDS
 from services.line.price_service import handle_price_query
+
+
+MARKET_DATA_AGE_MINUTES = MAX_MARKET_DATA_AGE_SECONDS // 60
 
 
 class PriceServiceTest(unittest.TestCase):
@@ -36,7 +40,7 @@ class PriceServiceTest(unittest.TestCase):
             "price_usd": 100,
             "change_24h": 1.5,
             "source": "Supabase",
-            "updated_at": (now_utc - timedelta(minutes=6)).isoformat(),
+            "updated_at": (now_utc - timedelta(minutes=7)).isoformat(),
         }
 
         with patch(
@@ -45,7 +49,7 @@ class PriceServiceTest(unittest.TestCase):
         ):
             result = handle_price_query("btc")
 
-        self.assertIn("⚠️ BTC 價格資料超過 5 分鐘", result)
+        self.assertIn(f"⚠️ BTC 價格資料超過 {MARKET_DATA_AGE_MINUTES} 分鐘", result)
         self.assertIn("https://www.coinglass.com/zh-TW/currencies/BTC", result)
         self.assertNotIn("AVAX", result)
 
@@ -56,7 +60,7 @@ class PriceServiceTest(unittest.TestCase):
         ):
             result = handle_price_query("btc")
 
-        self.assertIn("⚠️ BTC 價格資料超過 5 分鐘", result)
+        self.assertIn(f"⚠️ BTC 價格資料超過 {MARKET_DATA_AGE_MINUTES} 分鐘", result)
         self.assertIn("https://www.coinglass.com/zh-TW/currencies/BTC", result)
 
 

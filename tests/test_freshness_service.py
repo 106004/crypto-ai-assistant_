@@ -20,7 +20,7 @@ class FreshnessServiceTest(unittest.TestCase):
         now_utc = datetime.now(timezone.utc)
         market_data = {
             "symbol": "BTC",
-            "updated_at": (now_utc - timedelta(minutes=6)).isoformat(),
+            "updated_at": (now_utc - timedelta(minutes=7)).isoformat(),
         }
 
         result = is_market_data_fresh(market_data)

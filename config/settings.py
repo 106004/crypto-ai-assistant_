@@ -30,7 +30,7 @@ class Settings:
 
         self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-        self.MAX_MARKET_DATA_AGE_SECONDS = 300
+        self.MAX_MARKET_DATA_AGE_SECONDS = 360
         self.GEMINI_MODEL = "gemini-2.5-flash"
         self.SUPPORTED_COINS = dict(COIN_CATALOG)
         self.DEFAULT_FAVORITE_COIN = "btc"

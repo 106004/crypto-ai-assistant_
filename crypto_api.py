@@ -1,5 +1,3 @@
-from datetime import datetime, timezone
-
 from config.settings import MAX_MARKET_DATA_AGE_SECONDS
 from services.market.freshness_service import (
     is_market_data_fresh as _is_market_data_fresh_service,
@@ -47,7 +45,7 @@ def get_coinglass_url(symbol):
 def get_all_mainstream_coinglass_links():
     lines = []
     for symbol_key, coinglass_symbol in COINGLASS_SYMBOLS.items():
-        lines.append(f"{symbol_key.upper()}：")
+        lines.append(f"{symbol_key.upper()}")
         lines.append(f"https://www.coinglass.com/zh-TW/currencies/{coinglass_symbol}")
         lines.append("")
 
@@ -56,10 +54,9 @@ def get_all_mainstream_coinglass_links():
 
 def get_coinglass_fallback_message():
     return (
-        "⚠️ 即時市場資料服務暫時異常\n\n"
-        "因為價格具有即時性，\n"
-        "系統不會使用超過 5 分鐘的舊價格避免誤導。\n\n"
-        "你可以先查看 CoinGlass 即時行情：\n\n"
+        "目前無法提供即時價格。\n\n"
+        "請改看 CoinGlass 即時行情。\n"
+        f"系統只接受 {MAX_MARKET_DATA_AGE_SECONDS // 60} 分鐘內的價格資料，避免誤導。\n\n"
         f"{get_all_mainstream_coinglass_links()}"
     )
 
@@ -73,31 +70,32 @@ def get_coin_from_supabase(symbol):
     """Read one fresh coin from Supabase market_data."""
 
     normalized_symbol = str(symbol).strip().upper()
-    print(f"[SupabaseData] 嘗試讀取 market_data：{normalized_symbol}")
+    print(f"[SupabaseData] reading market_data for {normalized_symbol}")
 
     try:
         from database_manager import get_market_data_by_symbol
 
         coin_data = get_market_data_by_symbol(normalized_symbol)
     except Exception as error:
-        print(f"[SupabaseData] 讀取 market_data 失敗：{error}")
-        print("[SupabaseData] 是否找到資料：False")
+        print(f"[SupabaseData] market_data fetch failed: {error}")
+        print("[SupabaseData] no fresh data available")
         return None
 
     found = isinstance(coin_data, dict)
-    print(f"[SupabaseData] 是否找到資料：{found}")
+    print(f"[SupabaseData] found: {found}")
     if not found:
-        print(f"[Freshness] {normalized_symbol} 在 Supabase 沒有資料，提供 CoinGlass fallback links")
+        print(f"[Freshness] {normalized_symbol} no Supabase data, using CoinGlass fallback links")
         return None
 
     try:
         fresh = _is_market_data_fresh(normalized_symbol, coin_data.get("updated_at"))
     except (TypeError, ValueError) as error:
-        print(f"[Freshness] {normalized_symbol} updated_at 解析失敗：{error}")
+        print(f"[Freshness] {normalized_symbol} updated_at parse failed: {error}")
         fresh = False
 
     if not fresh:
         return None
+
     result = dict(coin_data)
     result["source"] = "Supabase"
     return result

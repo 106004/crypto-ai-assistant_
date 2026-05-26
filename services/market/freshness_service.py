@@ -25,7 +25,7 @@ def get_market_data_age_seconds(market_data):
     market_data = market_data or {}
     updated_at = market_data.get("updated_at")
     if not updated_at:
-        print("[Freshness] updated_at 缺失")
+        print("[Freshness] updated_at missing")
         return None
 
     updated_time = _parse_updated_at(updated_at)
@@ -37,14 +37,19 @@ def get_market_data_age_seconds(market_data):
     return age_seconds
 
 
+def log_market_data_max_age_seconds():
+    print(f"[Freshness] max age seconds: {MAX_MARKET_DATA_AGE_SECONDS}")
+    return MAX_MARKET_DATA_AGE_SECONDS
+
+
 def is_market_data_fresh(market_data):
     symbol = str((market_data or {}).get("symbol") or "").strip().upper() or "UNKNOWN"
+    max_age_seconds = log_market_data_max_age_seconds()
     age_seconds = get_market_data_age_seconds(market_data)
     if age_seconds is None:
         print(f"[Freshness] {symbol} fresh: False")
         return False
 
-    fresh = age_seconds <= MAX_MARKET_DATA_AGE_SECONDS
+    fresh = age_seconds <= max_age_seconds
     print(f"[Freshness] {symbol} fresh: {fresh}")
     return fresh
-

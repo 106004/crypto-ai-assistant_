@@ -2,24 +2,26 @@
 
 from __future__ import annotations
 
+from config.settings import MAX_MARKET_DATA_AGE_SECONDS
 from crypto_api import get_coinglass_fallback_message
 from services.market.coin_catalog import SUPPORTED_COINS, get_coinglass_url
 
 
 SUPPORTED_COIN_LIST = " / ".join(SUPPORTED_COINS.keys())
+MARKET_DATA_AGE_MINUTES = MAX_MARKET_DATA_AGE_SECONDS // 60
 
 
 def _usage_guide_header(title):
     return (
         f"{title}\n\n"
-        "查價格：btc / eth / sol\n"
-        "支援 10 種幣：btc / eth / sol / bnb / xrp / doge / ada / ton / trx / avax\n"
+        "可查幣價：btc / eth / sol\n"
+        "支援 10 幣種：btc / eth / sol / bnb / xrp / doge / ada / ton / trx / avax\n"
         "AI 分析：analyze btc\n"
-        "設定最愛幣：set btc\n"
-        "查詢最愛幣：mycoin\n"
-        "資料規則：超過 5 分鐘的價格不會回覆舊資料\n"
+        "設定幣種：set btc\n"
+        "查看幣種：mycoin\n"
+        f"資料規則：超過 {MARKET_DATA_AGE_MINUTES} 分鐘的價格不會回覆舊資料\n"
         "異常時：會提供 CoinGlass 即時行情連結\n"
-        "提醒：這不是投資建議"
+        "可隨時輸入 /help 查看說明"
     )
 
 
@@ -35,11 +37,11 @@ def format_supported_coin_message():
     return (
         "目前支援的幣種：\n"
         f"{SUPPORTED_COIN_LIST}\n\n"
-        "查價格：btc / eth / sol\n"
+        "可直接查幣價：btc / eth / sol\n"
         "AI 分析：analyze btc\n"
-        "設定最愛幣：set btc\n"
-        "查詢最愛幣：mycoin\n"
-        "提醒：這不是投資建議"
+        "設定幣種：set btc\n"
+        "查看幣種：mycoin\n"
+        "可隨時輸入 /help 查看說明"
     )
 
 
@@ -49,22 +51,22 @@ def format_unknown_command_message():
 
 def format_missing_favorite_coin_message():
     return (
-        "你目前還沒有設定最愛幣。\n\n"
-        "你可以使用：set btc / set eth / set sol\n"
+        "尚未設定常用幣種。\n"
+        "請先輸入 set btc / set eth / set sol\n"
         f"支援幣種：{SUPPORTED_COIN_LIST}\n"
-        "也可以輸入 mycoin 查看目前設定。\n"
-        "提醒：這不是投資建議"
+        "之後可以用 mycoin 查看目前設定。\n"
+        "異常時：會提供 CoinGlass 即時行情連結"
     )
 
 
 def format_set_coin_success_message(symbol):
     display_symbol = str(symbol).strip().upper() or "UNKNOWN"
-    return f"✅ 已設定你最愛的幣種為 {display_symbol}"
+    return f"已設定預設幣種為 {display_symbol}"
 
 
 def format_mycoin_message(symbol):
     display_symbol = str(symbol).strip().upper() or "UNKNOWN"
-    return f"你目前設定的最愛幣種是 {display_symbol}"
+    return f"你目前的常用幣種是 {display_symbol}"
 
 
 def format_coin_glass_link_message(symbol, headline, body):
@@ -79,12 +81,8 @@ def format_coin_glass_link_message(symbol, headline, body):
 def format_analysis_stale_message(symbol):
     return format_coin_glass_link_message(
         symbol,
-        "⚠️ 資訊超過 5 分鐘，AI 無法分析。",
-        (
-            "因為價格資料具有即時性，\n"
-            "系統不會使用過期資料產生分析，避免誤導。\n\n"
-            "請稍後再試，或查看 CoinGlass 即時行情。"
-        ),
+        f"⚠️ 資訊超過 {MARKET_DATA_AGE_MINUTES} 分鐘，AI 無法分析。",
+        "目前資料已過期，為避免誤導，系統不會回傳 AI 分析。",
     )
 
 
@@ -113,10 +111,10 @@ def format_analysis_message(symbol, analysis_text):
 def format_stale_data_message(symbol, coinglass_url=None):
     print("[MessageService] format stale message")
     display_symbol = str(symbol).strip().upper() or "UNKNOWN"
-    headline = f"⚠️ {display_symbol} 價格資料超過 5 分鐘"
-    body = "系統不會推播過期價格，避免誤導。\n你可以查看 CoinGlass 即時行情："
+    headline = f"⚠️ {display_symbol} 價格資料超過 {MARKET_DATA_AGE_MINUTES} 分鐘"
+    body = "目前 Supabase 的價格已過期，為避免誤導不會回傳舊價格。"
 
     if coinglass_url:
-        return f"{headline}\n\n{body}\n{coinglass_url}"
+        return f"{headline}\n\n{body}\n\n{coinglass_url}"
 
     return format_coin_glass_link_message(display_symbol, headline, body)

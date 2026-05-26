@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+from config.settings import MAX_MARKET_DATA_AGE_SECONDS
 from data.clients.line_client import push_message
 from data.repositories.market_data_repository import get_market_data_by_symbol
 from data.repositories.user_repository import get_all_users
-from services.market.collector_service import collect_market_data
 from services.line.message_service import (
     format_coin_glass_link_message,
     format_daily_guide_message,
     format_missing_favorite_coin_message,
     format_price_message,
 )
+from services.market.collector_service import collect_market_data
 from services.market.freshness_service import is_market_data_fresh
 from utils.logger import log_error, log_info, log_warning
+
+
+MARKET_DATA_AGE_MINUTES = MAX_MARKET_DATA_AGE_SECONDS // 60
 
 
 def run_market_update_job(collector=None):
@@ -59,8 +63,8 @@ def run_daily_guide_job(get_users_fn=None, push_message_fn=None, guide_message_f
 def _build_favorite_coin_stale_message(symbol):
     return format_coin_glass_link_message(
         symbol,
-        f"⚠️ {symbol} 價格資料超過 5 分鐘",
-        "系統不會推播過期價格，避免誤導。",
+        f"⚠️ {symbol} 價格資料超過 {MARKET_DATA_AGE_MINUTES} 分鐘",
+        "目前資料已過期，為避免誤導不會推播舊價格。",
     )
 
 

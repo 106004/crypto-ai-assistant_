@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from data.repositories.market_data_repository import get_market_data_by_symbol  # compatibility alias
 from services.line.message_service import format_price_message, format_stale_data_message
 from services.market.coin_catalog import get_coinglass_url
-from services.market.freshness_service import is_market_data_fresh
+from services.market.freshness_service import is_market_data_fresh, log_market_data_max_age_seconds
 
 
 def _parse_market_data_updated_at_utc(updated_at):
@@ -32,24 +32,26 @@ def _check_supabase_market_data_freshness(symbol, updated_at, now_utc=None):
     else:
         now_utc = now_utc.astimezone(timezone.utc)
 
-    print(f"[Freshness] {symbol} updated_at 值：{updated_at}")
+    print(f"[Freshness] {symbol} updated_at: {updated_at}")
     updated_time = _parse_market_data_updated_at_utc(updated_at)
-    age_seconds = max(0, (now_utc - updated_time).total_seconds())
+    age_seconds = max(0, int((now_utc - updated_time).total_seconds()))
     age_minutes = age_seconds / 60
-    fresh = age_seconds <= 300
 
-    print(f"[Freshness] {symbol} parsed updated_at UTC：{updated_time.isoformat()}")
-    print(f"[Freshness] 現在 UTC：{now_utc.isoformat()}")
-    print(f"[Freshness] 資料年齡：{age_minutes:.1f} 分鐘")
-    print("[Freshness] freshness limit：5 分鐘")
-    print(f"[Freshness] fresh：{fresh}")
+    max_age_seconds = log_market_data_max_age_seconds()
+    print(f"[Freshness] {symbol} parsed updated_at UTC: {updated_time.isoformat()}")
+    print(f"[Freshness] now UTC: {now_utc.isoformat()}")
+    print(f"[Freshness] age minutes: {age_minutes:.1f} 分鐘")
+    print(f"[Freshness] freshness limit：{max_age_seconds // 60} 分鐘")
+
+    fresh = age_seconds <= max_age_seconds
+    print(f"[Freshness] fresh: {fresh}")
 
     if fresh:
-        print(f"[Freshness] {symbol} 資料新鮮，年齡 {age_minutes:.1f} 分鐘")
+        print(f"[Freshness] {symbol} 資料新鮮，資料年齡：{age_minutes:.1f} 分鐘")
     else:
         print(
-            f"[Freshness] {symbol} 資料過期，年齡 {age_minutes:.1f} 分鐘，"
-            "不會回覆舊價格"
+            f"[Freshness] {symbol} 資料已過期，資料年齡：{age_minutes:.1f} 分鐘，"
+            f"超過限制：{max_age_seconds // 60} 分鐘，放棄使用 Supabase 價格"
         )
 
     return {
@@ -67,7 +69,7 @@ def get_fresh_market_data(symbol, now_utc=None, get_market_data_by_symbol_fn=Non
 
     market_data = get_market_data_by_symbol_fn(display_symbol)
     if not isinstance(market_data, dict):
-        print(f"[Freshness] {display_symbol} Supabase 沒有資料，走 CoinGlass fallback links")
+        print(f"[Freshness] {display_symbol} Supabase 沒有資料，提供 CoinGlass fallback links")
         return None
 
     try:
@@ -77,10 +79,8 @@ def get_fresh_market_data(symbol, now_utc=None, get_market_data_by_symbol_fn=Non
             now_utc=now_utc,
         )
     except (TypeError, ValueError) as error:
-        print(f"[Freshness] {display_symbol} updated_at 解析失敗：{error}")
-        print(
-            f"[Freshness] {display_symbol} 資料視為過期，避免使用無法判斷時間的資料"
-        )
+        print(f"[Freshness] {display_symbol} updated_at 解析失敗: {error}")
+        print(f"[Freshness] {display_symbol} 銀行資料異常，放棄使用 Supabase 價格")
         return None
 
     if not freshness["fresh"]:
