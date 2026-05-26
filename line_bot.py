@@ -1,19 +1,12 @@
-"""LINE webhook entrypoint and legacy compatibility wrappers."""
+"""LINE webhook entrypoint."""
 
 from __future__ import annotations
 
 import json
 
 from data.clients.line_client import push_message, reply_message
-from data.repositories.market_data_repository import get_market_data_by_symbol
-from services.line import analysis_service, onboarding_service, price_service
+from services.line import onboarding_service
 from services.line.command_router import route_user_message
-from services.line.message_service import format_supported_coin_message
-from services.market.coin_catalog import SUPPORTED_COINS
-
-
-def _supported_coin_text():
-    return format_supported_coin_message()
 
 
 def send_welcome_manual(reply_token, user_id=None):
@@ -22,60 +15,6 @@ def send_welcome_manual(reply_token, user_id=None):
 
     success = reply_message(reply_token, onboarding_service.handle_new_user(user_id))
     return success
-
-
-def _get_fresh_supabase_market_data(symbol, now_utc=None):
-    return price_service.get_fresh_market_data(
-        symbol,
-        now_utc=now_utc,
-        get_market_data_by_symbol_fn=get_market_data_by_symbol,
-    )
-
-
-def _handle_set_coin(user_id, reply_token, user_text):
-    parts = str(user_text).split()
-    if len(parts) != 2 or parts[0] != "set":
-        return False
-
-    coin = parts[1].strip().lower()
-    if coin not in SUPPORTED_COINS:
-        reply_message(reply_token, _supported_coin_text())
-        return True
-
-    reply_message(reply_token, onboarding_service.handle_set_coin(user_id, coin))
-    return True
-
-
-def _handle_mycoin(user_id, reply_token):
-    reply_message(reply_token, onboarding_service.handle_mycoin(user_id))
-    return True
-
-
-def _handle_coin_price(reply_token, user_text):
-    display_symbol = str(user_text).strip().upper()
-    print(f"[PriceFlow] start {display_symbol}")
-    reply_text = price_service.handle_price_query(
-        display_symbol,
-        get_market_data_by_symbol_fn=get_market_data_by_symbol,
-    )
-    reply_message(reply_token, reply_text)
-
-
-def _handle_analyze_command(reply_token, user_text):
-    parts = str(user_text).strip().lower().split()
-    if len(parts) != 2 or parts[0] != "analyze":
-        return False
-
-    coin = parts[1]
-    display_symbol = coin.upper()
-    print(f"[Analyze] start analyze {display_symbol}")
-    analysis_text = analysis_service.handle_analysis_query(
-        display_symbol,
-        get_market_data_by_symbol_fn=analysis_service.get_market_data_by_symbol,
-        analyze_market_data_fn=analysis_service.analyze_market_data,
-    )
-    reply_message(reply_token, analysis_text)
-    return True
 
 
 def handle_webhook(request):

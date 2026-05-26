@@ -3,10 +3,50 @@ import sys
 import unittest
 from unittest.mock import patch
 
+from services.agent.agent_metrics import AGENT_METRICS
+
 
 class AppCronRoutesTest(unittest.TestCase):
     def tearDown(self):
         sys.modules.pop("app", None)
+
+    def test_metrics_endpoint_returns_agent_metrics(self):
+        sys.modules.pop("app", None)
+        original_metrics = {
+            "workflow_success": AGENT_METRICS["workflow_success"],
+            "workflow_failure": AGENT_METRICS["workflow_failure"],
+            "fallback_count": AGENT_METRICS["fallback_count"],
+            "intent_counts": dict(AGENT_METRICS["intent_counts"]),
+            "workflow_latency_ms": list(AGENT_METRICS["workflow_latency_ms"]),
+        }
+        AGENT_METRICS["workflow_success"] = 2
+        AGENT_METRICS["workflow_failure"] = 1
+        AGENT_METRICS["fallback_count"] = 3
+        AGENT_METRICS["intent_counts"] = {"price_query": 4}
+        AGENT_METRICS["workflow_latency_ms"] = [10.0, 20.0]
+
+        try:
+            app_module = importlib.import_module("app")
+
+            response = app_module.app.test_client().get("/metrics")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(
+                response.get_json(),
+                {
+                    "workflow_success": 2,
+                    "workflow_failure": 1,
+                    "fallback_count": 3,
+                    "intent_counts": {"price_query": 4},
+                    "workflow_latency_ms": [10.0, 20.0],
+                },
+            )
+        finally:
+            AGENT_METRICS["workflow_success"] = original_metrics["workflow_success"]
+            AGENT_METRICS["workflow_failure"] = original_metrics["workflow_failure"]
+            AGENT_METRICS["fallback_count"] = original_metrics["fallback_count"]
+            AGENT_METRICS["intent_counts"] = original_metrics["intent_counts"]
+            AGENT_METRICS["workflow_latency_ms"] = original_metrics["workflow_latency_ms"]
 
     def test_update_market_data_endpoint_runs_collector(self):
         sys.modules.pop("app", None)

@@ -1,5 +1,6 @@
 from flask import Flask, jsonify
 
+from routes.agent_metrics import agent_metrics_bp
 from routes.cron import cron_bp
 from routes.health import health_bp
 from routes.webhook import webhook_bp
@@ -10,6 +11,7 @@ print("[App] Flask app initialized")
 
 app.register_blueprint(cron_bp)
 app.register_blueprint(health_bp)
+app.register_blueprint(agent_metrics_bp)
 app.register_blueprint(webhook_bp)
 print("[App] Blueprints registered")
 
@@ -17,6 +19,13 @@ print("[App] Blueprints registered")
 @app.route("/")
 def home():
     return jsonify({"status": "ok"})
+
+
+@app.route("/metrics")
+def metrics():
+    from services.agent.agent_metrics import get_agent_metrics
+
+    return jsonify(get_agent_metrics())
 
 
 if __name__ == "__main__":
