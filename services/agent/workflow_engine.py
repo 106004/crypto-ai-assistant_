@@ -13,6 +13,8 @@ from time import perf_counter
 
 from services.agent import agent_metrics
 from services.agent import agent_policy, decision_engine, state_manager, tool_registry
+from services.line.message_service import format_clarification_message
+from services.agent.unsupported_coin_service import build_unsupported_coin_message
 
 
 def _execute_tool(intent: str, user_id: str, coin: str, tool):
@@ -37,7 +39,7 @@ def _execute_tool(intent: str, user_id: str, coin: str, tool):
     return None
 
 
-def _build_state_updates(intent: str, coin: str):
+def _build_state_updates(intent: str, coin: str, extra_updates: dict | None = None):
     """Build the minimal state update payload.
 
     We only write last_coin when we actually have a coin.
@@ -47,6 +49,8 @@ def _build_state_updates(intent: str, coin: str):
     updates = {"last_intent": intent}
     if coin:
         updates["last_coin"] = coin
+    if extra_updates:
+        updates.update(dict(extra_updates))
     return updates
 
 
@@ -76,8 +80,54 @@ def run_agent_workflow(user_id: str, message: str):
         intent = str(decision.get("intent") or "unknown").strip().lower()
         coin = str(decision.get("coin") or "").strip().upper()
         confidence = float(decision.get("confidence") or 0.0)
+        candidates = list(decision.get("candidates") or [])
         agent_metrics.record_intent_usage(intent)
         print(f"[AgentWorkflow] intent decided: {intent}")
+
+        if intent == "clarification_needed":
+            print("[Clarification] clarification triggered")
+            print(f"[Clarification] candidates suggested: {candidates}")
+            clarification_message = format_clarification_message(
+                candidates,
+                reason=str(decision.get("reason") or "low_confidence"),
+            )
+            state = state_manager.update_user_state(
+                user_id,
+                _build_state_updates(
+                    intent,
+                    coin,
+                    extra_updates={"last_clarification_candidates": candidates},
+                ),
+            )
+            print("[AgentWorkflow] state updated")
+            agent_metrics.record_workflow_success(intent)
+            workflow_success = True
+            return {
+                "intent": intent,
+                "candidates": candidates,
+                "reason": str(decision.get("reason") or "low_confidence"),
+                "message": clarification_message,
+                "state": state,
+            }
+
+        if intent == "unsupported_coin":
+            print("[UnsupportedCoin] unsupported workflow triggered")
+            unsupported_message = build_unsupported_coin_message(coin)
+            state = state_manager.update_user_state(
+                user_id,
+                _build_state_updates(intent, coin),
+            )
+            print("[AgentWorkflow] state updated")
+            print("[UnsupportedCoin] response returned")
+            agent_metrics.record_workflow_success(intent)
+            workflow_success = True
+            return {
+                "intent": intent,
+                "coin": coin,
+                "reason": str(decision.get("reason") or "coin_not_supported"),
+                "message": unsupported_message,
+                "state": state,
+            }
 
         # Step 3: Look up the matching tool from the registry.
         tool = tool_registry.get_tool_for_intent(intent)

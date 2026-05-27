@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from config.settings import MAX_MARKET_DATA_AGE_SECONDS
 from crypto_api import get_coinglass_fallback_message
+from services.agent.clarification_service import build_clarification_message
 from services.market.coin_catalog import SUPPORTED_COINS, get_coinglass_url
 
 
@@ -47,6 +48,11 @@ def format_supported_coin_message():
 
 def format_unknown_command_message():
     return format_supported_coin_message()
+
+
+def format_clarification_message(candidates, reason="low_confidence"):
+    print("[Clarification] response built")
+    return build_clarification_message(candidates, reason=reason)
 
 
 def format_missing_favorite_coin_message():

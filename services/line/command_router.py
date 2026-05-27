@@ -2,16 +2,71 @@
 
 from __future__ import annotations
 
+from services.agent import semantic_resolver
 from services.agent.workflow_engine import run_agent_workflow
+from services.agent.unsupported_coin_service import detect_unsupported_coin
 from services.line import onboarding_service
 from services.line.line_facade_service import handle_coin_analysis, handle_coin_price
-from services.line.message_service import format_supported_coin_message, format_unknown_command_message
+from services.line.message_service import (
+    format_clarification_message,
+    format_supported_coin_message,
+    format_unknown_command_message,
+)
 from services.market.coin_catalog import get_coin_info, is_supported_coin
 
 
-HELP_COMMANDS = {"help", "/help", "說明", "使用說明", "隤芣?", "雿輻隤芣?"}
+HELP_COMMANDS = {"help", "/help", "說明", "使用說明"}
 AGENT_PRICE_COMMANDS = {"btc", "eth", "sol", "bnb", "xrp", "doge", "ada", "ton", "trx", "avax"}
 AGENT_ONBOARDING_COMMANDS = AGENT_PRICE_COMMANDS
+AGENT_FALLBACK_HINTS = {
+    "mycoin",
+    "favorite",
+    "最愛",
+    "最爱",
+}
+
+
+def _route_agent_reply(user_id, normalized_message, branch_label):
+    print(branch_label)
+    try:
+        agent_result = run_agent_workflow(user_id, normalized_message)
+        intent = str(agent_result.get("intent") or "").strip().lower()
+        if intent == "clarification_needed":
+            print("[Clarification] returned to LINE")
+            candidates = list(agent_result.get("candidates") or [])
+            reason = str(agent_result.get("reason") or "low_confidence")
+            message = str(agent_result.get("message") or "").strip()
+            if not message:
+                message = format_clarification_message(candidates, reason=reason)
+            return message
+
+        if intent == "unsupported_coin":
+            message = str(agent_result.get("message") or "").strip()
+            if message:
+                return message
+
+        result_message = agent_result.get("result")
+        if result_message is not None:
+            return result_message
+        raise ValueError("agent workflow returned no result")
+    except Exception as error:
+        print("[Agent] fallback to legacy flow")
+        print(f"[Agent] fallback error: {error}")
+        return None
+
+
+def _should_route_to_agent(normalized_message: str) -> bool:
+    if not normalized_message:
+        return False
+
+    coin_resolution = semantic_resolver.resolve_coin_symbol(normalized_message)
+    if str(coin_resolution.get("method") or "").strip().lower() in {"exact_alias", "fuzzy"}:
+        return True
+
+    if any(hint in normalized_message for hint in AGENT_FALLBACK_HINTS):
+        return True
+
+    return False
 
 
 def route_user_message(user_id, user_message, event_type=None):
@@ -29,86 +84,107 @@ def route_user_message(user_id, user_message, event_type=None):
     parts = normalized_message.split()
 
     if len(parts) == 1 and parts[0] in AGENT_PRICE_COMMANDS:
-        print("[Agent] price_query routed to Agent workflow")
-        try:
-            agent_result = run_agent_workflow(user_id, normalized_message)
+        agent_reply = _route_agent_reply(
+            user_id,
+            normalized_message,
+            "[Agent] price_query routed to Agent workflow",
+        )
+        if agent_reply is not None:
             print("[Agent] price workflow success")
-            price_message = agent_result.get("result")
-            if price_message is not None:
-                return price_message
-            raise ValueError("price workflow returned no result")
-        except Exception as error:
-            print("[Agent] fallback to legacy price flow")
-            print(f"[Agent] fallback error: {error}")
-            return handle_coin_price(parts[0])
+            return agent_reply
+        print("[Agent] fallback to legacy price flow")
+        print("[Agent] fallback error: agent workflow returned no result")
+        return handle_coin_price(parts[0])
 
     if len(parts) == 2 and parts[0] == "analyze" and get_coin_info(parts[1]) is not None:
         if parts[1] in AGENT_PRICE_COMMANDS:
-            print("[Agent] market_analysis routed to Agent workflow")
-            try:
-                agent_result = run_agent_workflow(user_id, normalized_message)
+            agent_reply = _route_agent_reply(
+                user_id,
+                normalized_message,
+                "[Agent] market_analysis routed to Agent workflow",
+            )
+            if agent_reply is not None:
                 print("[Agent] analysis workflow success")
-                analysis_message = agent_result.get("result")
-                if analysis_message is not None:
-                    return analysis_message
-                raise ValueError("analysis workflow returned no result")
-            except Exception as error:
-                print("[Agent] fallback to legacy analysis flow")
-                print(f"[Agent] fallback error: {error}")
-                return handle_coin_analysis(parts[1])
+                return agent_reply
+            print("[Agent] fallback to legacy analysis flow")
+            print("[Agent] fallback error: agent workflow returned no result")
+            return handle_coin_analysis(parts[1])
 
         print("[CommandRouter] route -> analysis_service")
         return handle_coin_analysis(parts[1])
 
     if len(parts) == 2 and parts[0] == "set":
         if not is_supported_coin(parts[1]):
+            if detect_unsupported_coin(normalized_message).get("coin"):
+                agent_reply = _route_agent_reply(
+                    user_id,
+                    normalized_message,
+                    "[Agent] unsupported_coin routed to Agent workflow",
+                )
+                if agent_reply is not None:
+                    return agent_reply
             print("[CommandRouter] route -> unknown_command")
             return format_unknown_command_message()
 
         if parts[1] in AGENT_ONBOARDING_COMMANDS:
-            print("[Agent] set_favorite_coin routed to Agent workflow")
-            try:
-                agent_result = run_agent_workflow(user_id, normalized_message)
+            agent_reply = _route_agent_reply(
+                user_id,
+                normalized_message,
+                "[Agent] set_favorite_coin routed to Agent workflow",
+            )
+            if agent_reply is not None:
                 print("[Agent] onboarding workflow success")
-                onboarding_message = agent_result.get("result")
-                if onboarding_message is not None:
-                    return onboarding_message
-                raise ValueError("onboarding workflow returned no result")
-            except Exception as error:
-                print("[Agent] fallback to legacy onboarding flow")
-                print(f"[Agent] fallback error: {error}")
-                return onboarding_service.handle_set_coin(user_id, parts[1])
+                return agent_reply
+            print("[Agent] fallback to legacy onboarding flow")
+            print("[Agent] fallback error: agent workflow returned no result")
+            return onboarding_service.handle_set_coin(user_id, parts[1])
 
         print("[CommandRouter] route -> onboarding set coin")
         return onboarding_service.handle_set_coin(user_id, parts[1])
 
     if len(parts) == 1 and parts[0] == "mycoin":
-        print("[Agent] get_favorite_coin routed to Agent workflow")
-        try:
-            agent_result = run_agent_workflow(user_id, normalized_message)
+        agent_reply = _route_agent_reply(
+            user_id,
+            normalized_message,
+            "[Agent] get_favorite_coin routed to Agent workflow",
+        )
+        if agent_reply is not None:
             print("[Agent] onboarding workflow success")
-            onboarding_message = agent_result.get("result")
-            if onboarding_message is not None:
-                return onboarding_message
-            raise ValueError("onboarding workflow returned no result")
-        except Exception as error:
-            print("[Agent] fallback to legacy onboarding flow")
-            print(f"[Agent] fallback error: {error}")
-            return onboarding_service.handle_mycoin(user_id)
+            return agent_reply
+        print("[Agent] fallback to legacy onboarding flow")
+        print("[Agent] fallback error: agent workflow returned no result")
+        return onboarding_service.handle_mycoin(user_id)
 
     if len(parts) == 1 and parts[0] in HELP_COMMANDS:
-        print("[Agent] help intent routed to Agent workflow")
-        try:
-            agent_result = run_agent_workflow(user_id, normalized_message)
+        agent_reply = _route_agent_reply(
+            user_id,
+            normalized_message,
+            "[Agent] help intent routed to Agent workflow",
+        )
+        if agent_reply is not None:
             print("[Agent] help workflow success")
-            help_message = agent_result.get("result")
-            if help_message is not None:
-                return help_message
-            raise ValueError("help workflow returned no result")
-        except Exception as error:
-            print("[Agent] fallback to legacy help")
-            print(f"[Agent] fallback error: {error}")
-            return format_supported_coin_message()
+            return agent_reply
+        print("[Agent] fallback to legacy help")
+        print("[Agent] fallback error: agent workflow returned no result")
+        return format_supported_coin_message()
+
+    if detect_unsupported_coin(normalized_message).get("coin"):
+        agent_reply = _route_agent_reply(
+            user_id,
+            normalized_message,
+            "[Agent] unsupported_coin routed to Agent workflow",
+        )
+        if agent_reply is not None:
+            return agent_reply
+
+    if _should_route_to_agent(normalized_message):
+        agent_reply = _route_agent_reply(
+            user_id,
+            normalized_message,
+            "[Agent] semantic fallback routed to Agent workflow",
+        )
+        if agent_reply is not None:
+            return agent_reply
 
     print("[CommandRouter] route -> unknown_command")
     return format_unknown_command_message()
