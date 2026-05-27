@@ -45,6 +45,9 @@ def _route_agent_reply(user_id, normalized_message, branch_label):
             if message:
                 return message
 
+        if intent == "unknown":
+            return format_unknown_command_message()
+
         result_message = agent_result.get("result")
         if result_message is not None:
             return result_message
@@ -53,6 +56,18 @@ def _route_agent_reply(user_id, normalized_message, branch_label):
         print("[Agent] fallback to legacy flow")
         print(f"[Agent] fallback error: {error}")
         return None
+
+
+def _route_semantic_agent_fallback(user_id, normalized_message):
+    print("[CommandRouter] fallback to Semantic Agent")
+    agent_reply = _route_agent_reply(
+        user_id,
+        normalized_message,
+        "[CommandRouter] fallback to Semantic Agent",
+    )
+    if agent_reply is not None:
+        return agent_reply
+    return format_unknown_command_message()
 
 
 def _should_route_to_agent(normalized_message: str) -> bool:
@@ -113,6 +128,10 @@ def route_user_message(user_id, user_message, event_type=None):
         print("[CommandRouter] route -> analysis_service")
         return handle_coin_analysis(parts[1])
 
+    if len(parts) == 2 and parts[0] == "analyze":
+        print("[CommandRouter] route -> analysis_service")
+        return handle_coin_analysis(parts[1])
+
     if len(parts) == 2 and parts[0] == "set":
         if not is_supported_coin(parts[1]):
             if detect_unsupported_coin(normalized_message).get("coin"):
@@ -123,8 +142,7 @@ def route_user_message(user_id, user_message, event_type=None):
                 )
                 if agent_reply is not None:
                     return agent_reply
-            print("[CommandRouter] route -> unknown_command")
-            return format_unknown_command_message()
+            return _route_semantic_agent_fallback(user_id, normalized_message)
 
         if parts[1] in AGENT_ONBOARDING_COMMANDS:
             agent_reply = _route_agent_reply(
@@ -186,5 +204,4 @@ def route_user_message(user_id, user_message, event_type=None):
         if agent_reply is not None:
             return agent_reply
 
-    print("[CommandRouter] route -> unknown_command")
-    return format_unknown_command_message()
+    return _route_semantic_agent_fallback(user_id, normalized_message)

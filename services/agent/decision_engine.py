@@ -153,24 +153,28 @@ def _accept_llm_result(result: dict[str, object]) -> dict[str, object]:
     return _build_result(intent, coin=coin, confidence=confidence)
 
 
-def _build_clarification_result(message: str) -> dict[str, object] | None:
-    llm_result = classify_with_llm(message)
+def _build_clarification_result(
+    message: str,
+    candidates: list[dict[str, object]] | None = None,
+) -> dict[str, object] | None:
+    llm_result = classify_with_llm(message, candidates=candidates)
     llm_reason = str(llm_result.get("reason") or "").strip().lower()
     llm_intent = str(llm_result.get("intent") or "").strip().lower()
 
     if llm_intent == "unsupported_coin" or llm_reason == "coin_not_supported":
         return llm_result
 
-    if llm_intent == "clarification_needed" or llm_reason == "low_confidence":
-        candidates = suggest_clarification_candidates(message)
-        if not candidates:
+    if llm_intent == "clarification_needed" or llm_reason in {"low_confidence", "candidate_mismatch"}:
+        clarification_candidates = candidates or suggest_clarification_candidates(message)
+        if not clarification_candidates:
             print("[Clarification] clarification triggered")
             print("[Clarification] candidates suggested")
             return None
 
         print("[Clarification] clarification triggered")
-        print(f"[Clarification] candidates suggested: {candidates}")
-        return build_clarification_payload(candidates, reason="low_confidence")
+        print(f"[Clarification] candidates suggested: {clarification_candidates}")
+        reason = "candidate_mismatch" if llm_reason == "candidate_mismatch" else "low_confidence"
+        return build_clarification_payload(clarification_candidates, reason=reason)
 
     accepted = _accept_llm_result(llm_result)
     if accepted.get("intent") != "unknown" or accepted.get("coin"):
@@ -198,6 +202,8 @@ def decide_user_intent(message: str, user_state: dict | None = None):
 
     coin_resolution = semantic_resolver.resolve_coin_symbol(raw_text)
     resolved_coin = str(coin_resolution.get("coin") or "").strip().upper()
+    resolution_method = str(coin_resolution.get("method") or "").strip().lower()
+    resolution_candidates = coin_resolution.get("candidates")
     normalized = _normalize_text(raw_text)
     tokens = _tokenize(normalized)
     previous_intent = str((user_state or {}).get("last_intent") or "").strip().lower()
@@ -205,6 +211,11 @@ def decide_user_intent(message: str, user_state: dict | None = None):
     rule_based = _extract_rule_based_intent(normalized, tokens, resolved_coin, previous_intent)
     if rule_based is not None:
         return rule_based
+
+    if resolution_method == "fuzzy_candidates":
+        fuzzy_result = _build_clarification_result(raw_text, candidates=resolution_candidates)
+        if fuzzy_result is not None:
+            return fuzzy_result
 
     unsupported_coin_result = _build_unsupported_coin_result(raw_text)
     if unsupported_coin_result is not None:

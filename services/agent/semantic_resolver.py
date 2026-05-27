@@ -94,18 +94,18 @@ def _score_fuzzy(candidate: str, alias: str) -> float:
     return round(min(1.0, max(0.0, confidence)), 3)
 
 
-def _match_fuzzy_alias(message: str) -> dict[str, object] | None:
+def _match_fuzzy_candidates(message: str) -> dict[str, object] | None:
     candidates = _tokenize_candidates(message)
     if not candidates:
         return None
 
-    best_candidate = ""
-    best_alias = ""
-    best_symbol = ""
-    best_ratio = 0.0
+    best_scores: dict[str, float] = {}
+    best_sources: dict[str, tuple[str, str]] = {}
 
     for candidate, candidate_kind in candidates:
         if candidate_kind == "ascii":
+            if len(candidate) <= 3 and candidate not in _ALIAS_BY_LOWER:
+                continue
             alias_pool = _ASCII_ALIAS_VALUES
         elif candidate_kind == "cjk":
             alias_pool = _CJK_ALIAS_VALUES
@@ -114,34 +114,51 @@ def _match_fuzzy_alias(message: str) -> dict[str, object] | None:
         else:
             continue
 
-        matches = get_close_matches(candidate, alias_pool, n=1, cutoff=0.6)
+        matches = get_close_matches(candidate, alias_pool, n=3, cutoff=0.6)
         if not matches:
             continue
-        alias_lower = matches[0]
-        symbol = _ALIAS_BY_LOWER.get(alias_lower)
-        if symbol is None:
-            continue
-        if abs(len(candidate) - len(alias_lower)) > 1:
-            continue
-        ratio = SequenceMatcher(None, candidate, alias_lower).ratio()
-        if ratio > best_ratio:
-            best_candidate = candidate
-            best_alias = alias_lower
-            best_symbol = symbol
-            best_ratio = ratio
+        for alias_lower in matches:
+            symbol = _ALIAS_BY_LOWER.get(alias_lower)
+            if symbol is None:
+                continue
+            if abs(len(candidate) - len(alias_lower)) > 1:
+                continue
+            confidence = _score_fuzzy(candidate, alias_lower)
+            if confidence < 0.9:
+                continue
+            current_best = best_scores.get(symbol, 0.0)
+            if confidence > current_best:
+                best_scores[symbol] = confidence
+                best_sources[symbol] = (candidate, alias_lower)
 
-    if not best_symbol:
+    if not best_scores:
         return None
 
-    confidence = _score_fuzzy(best_candidate, best_alias)
-    if confidence < 0.85 or best_symbol not in _SUPPORTED_COINS_SET:
-        return None
-
-    print(
-        "[SemanticResolver] fuzzy matched "
-        f"candidate={best_candidate} alias={best_alias} coin={best_symbol} confidence={confidence}"
+    sorted_candidates = sorted(
+        best_scores.items(),
+        key=lambda item: (item[1], item[0]),
+        reverse=True,
     )
-    return {"coin": best_symbol, "confidence": confidence, "method": "fuzzy"}
+    payload = [
+        {"coin": symbol, "score": score}
+        for symbol, score in sorted_candidates
+        if symbol in _SUPPORTED_COINS_SET
+    ]
+    if not payload:
+        return None
+
+    first_symbol, first_score = sorted_candidates[0]
+    source_candidate, source_alias = best_sources[first_symbol]
+    print(
+        "[SemanticResolver] fuzzy candidates generated "
+        f"candidate={source_candidate} alias={source_alias} coin={first_symbol} confidence={first_score}"
+    )
+    return {
+        "coin": None,
+        "confidence": 0.0,
+        "method": "fuzzy_candidates",
+        "candidates": payload,
+    }
 
 
 def resolve_coin_symbol(message: str) -> dict[str, object]:
@@ -151,9 +168,9 @@ def resolve_coin_symbol(message: str) -> dict[str, object]:
     if exact_match is not None:
         return exact_match
 
-    fuzzy_match = _match_fuzzy_alias(message)
-    if fuzzy_match is not None:
-        return fuzzy_match
+    fuzzy_candidates = _match_fuzzy_candidates(message)
+    if fuzzy_candidates is not None:
+        return fuzzy_candidates
 
     print(f"[SemanticResolver] no confident match message={message}")
     return _build_none_result()

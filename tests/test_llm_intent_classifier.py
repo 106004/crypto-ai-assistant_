@@ -6,16 +6,20 @@ from services.agent.llm_intent_classifier import classify_with_llm, parse_llm_cl
 
 
 class FakeModels:
-    def __init__(self, response_text):
+    def __init__(self, response_text, capture=None):
         self.response_text = response_text
+        self.capture = capture
 
     def generate_content(self, model, contents):
+        if self.capture is not None:
+            self.capture["model"] = model
+            self.capture["contents"] = contents
         return type("Response", (), {"text": self.response_text})()
 
 
 class FakeClient:
-    def __init__(self, response_text):
-        self.models = FakeModels(response_text)
+    def __init__(self, response_text, capture=None):
+        self.models = FakeModels(response_text, capture=capture)
 
 
 class LLMIntentClassifierTest(unittest.TestCase):
@@ -213,10 +217,69 @@ class LLMIntentClassifierTest(unittest.TestCase):
             },
         )
 
+    def test_classify_with_llm_includes_candidates_in_prompt(self):
+        capture = {}
+        response_text = (
+            '{"intent":"price_query","coin":"BTC","confidence":0.91,'
+            '"reason":"selected candidate"}'
+        )
+        with patch(
+            "services.agent.llm_intent_classifier.get_gemini_client",
+            return_value=FakeClient(response_text, capture=capture),
+        ):
+            result = classify_with_llm(
+                "btcc price",
+                candidates=[{"coin": "BTC", "score": 0.86}],
+            )
+
+        self.assertEqual(result["intent"], "price_query")
+        self.assertEqual(result["coin"], "BTC")
+        self.assertIn("BTC", str(capture["contents"]))
+        self.assertIn("btcc price", str(capture["contents"]))
+
+    def test_classify_with_llm_rejects_candidate_mismatch(self):
+        response_text = (
+            '{"intent":"price_query","coin":"BTC","confidence":0.95,'
+            '"reason":"selected wrong coin"}'
+        )
+        with patch(
+            "services.agent.llm_intent_classifier.get_gemini_client",
+            return_value=FakeClient(response_text),
+        ):
+            result = classify_with_llm("LTC price", candidates=[{"coin": "ETH", "score": 0.84}])
+
+        self.assertIn(result["intent"], {"clarification_needed", "unknown"})
+        self.assertNotEqual(result.get("coin"), "BTC")
+
+    def test_classify_with_llm_returns_unsupported_coin_for_ltc(self):
+        response_text = (
+            '{"intent":"price_query","coin":"LTC","confidence":0.96,'
+            '"reason":"recognized but unsupported"}'
+        )
+        with patch(
+            "services.agent.llm_intent_classifier.get_gemini_client",
+            return_value=FakeClient(response_text),
+        ):
+            result = classify_with_llm("LTC price")
+
+        self.assertEqual(
+            result,
+            {
+                "intent": "unsupported_coin",
+                "coin": "LTC",
+                "confidence": 0.96,
+                "reason": "coin_not_supported",
+            },
+        )
+
     def test_decision_engine_calls_llm_when_ambiguous(self):
         with patch(
             "services.agent.decision_engine.semantic_resolver.resolve_coin_symbol",
-            return_value={"coin": None, "confidence": 0.0, "method": "none"},
+            return_value={
+                "coin": None,
+                "confidence": 0.0,
+                "method": "none",
+            },
         ), patch(
             "services.agent.decision_engine.classify_with_llm",
             return_value={
@@ -226,7 +289,7 @@ class LLMIntentClassifierTest(unittest.TestCase):
                 "reason": "ambiguous request",
             },
         ) as classify_with_llm_mock:
-            result = decide_user_intent("幫我看一下狗狗幣")
+            result = decide_user_intent("some ambiguous request")
 
         classify_with_llm_mock.assert_called_once()
         self.assertEqual(
@@ -234,26 +297,28 @@ class LLMIntentClassifierTest(unittest.TestCase):
             {"intent": "market_analysis", "coin": "DOGE", "confidence": 0.9},
         )
 
-    def test_classify_with_llm_parses_valid_json(self):
-        response_text = (
-            '{"intent":"price_query","coin":"ETH","confidence":0.91,'
-            '"reason":"user asked for price"}'
-        )
+    def test_decision_engine_fuzzy_candidates_flow(self):
         with patch(
-            "services.agent.llm_intent_classifier.get_gemini_client",
-            return_value=FakeClient(response_text),
-        ):
-            result = classify_with_llm("以太幣今天價格多少")
-
-        self.assertEqual(
-            result,
-            {
-                "intent": "price_query",
-                "coin": "ETH",
-                "confidence": 0.91,
-                "reason": "user asked for price",
+            "services.agent.decision_engine.semantic_resolver.resolve_coin_symbol",
+            return_value={
+                "coin": None,
+                "confidence": 0.0,
+                "method": "fuzzy_candidates",
+                "candidates": [{"coin": "BTC", "score": 0.86}],
             },
-        )
+        ), patch(
+            "services.agent.decision_engine.classify_with_llm",
+            return_value={
+                "intent": "price_query",
+                "coin": "BTC",
+                "confidence": 0.91,
+                "reason": "selected from candidates",
+            },
+        ) as classify_mock:
+            result = decide_user_intent("btcc price")
+
+        classify_mock.assert_called_once()
+        self.assertEqual(result, {"intent": "price_query", "coin": "BTC", "confidence": 0.91})
 
 
 if __name__ == "__main__":

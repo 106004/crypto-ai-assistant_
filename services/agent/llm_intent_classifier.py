@@ -97,7 +97,20 @@ def _normalize_confidence(raw_confidence: Any) -> tuple[float | None, str | None
     return confidence, None
 
 
-def _build_prompt(message: str) -> str:
+def _format_candidates(candidates: list[dict[str, object]] | None) -> str:
+    if not candidates:
+        return "None"
+
+    parts: list[str] = []
+    for item in candidates:
+        coin = str(item.get("coin") or "").strip().upper()
+        score = item.get("score")
+        if coin:
+            parts.append(f"{coin}:{score}")
+    return ", ".join(parts) if parts else "None"
+
+
+def _build_prompt(message: str, candidates: list[dict[str, object]] | None = None) -> str:
     return (
         "You are intent classifier.\n"
         "Please only output JSON.\n"
@@ -105,6 +118,9 @@ def _build_prompt(message: str) -> str:
         "Do not check prices.\n"
         "Do not analyze the market.\n"
         "Do not give investment advice.\n"
+        "Use the original message and the candidate coins if provided.\n"
+        "If a candidate looks similar but does not fit the user's meaning, do not select it.\n"
+        "If the coin is known but unsupported, return unsupported_coin.\n"
         "\n"
         "Return this JSON schema exactly:\n"
         '{'
@@ -114,11 +130,16 @@ def _build_prompt(message: str) -> str:
         '"reason":"..."'
         '}\n'
         "\n"
+        f"Candidate coins: {_format_candidates(candidates)}\n"
         f"User message: {message}"
     )
 
 
-def parse_llm_classifier_output(raw_text: str) -> dict[str, object]:
+def parse_llm_classifier_output(
+    raw_text: str,
+    message: str | None = None,
+    candidates: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     """Parse and validate a Gemini classifier payload."""
 
     json_text = _extract_json_text(raw_text)
@@ -165,6 +186,22 @@ def parse_llm_classifier_output(raw_text: str) -> dict[str, object]:
     if coin not in SUPPORTED_COINS:
         return _build_response("unsupported_coin", coin, confidence, "coin_not_supported")
 
+    candidate_coins = {
+        str(item.get("coin") or "").strip().upper()
+        for item in (candidates or [])
+        if str(item.get("coin") or "").strip()
+    }
+    if candidate_coins and coin not in candidate_coins:
+        return _build_response("clarification_needed", None, confidence, "candidate_mismatch")
+
+    if not candidate_coins and message:
+        message_coin_tokens = {
+            token.upper()
+            for token in re.findall(r"\b[A-Za-z]{2,4}\b", str(message))
+        }
+        if message_coin_tokens and coin not in message_coin_tokens:
+            return _build_response("clarification_needed", None, confidence, "candidate_mismatch")
+
     if intent == "unknown":
         return _build_response("unknown", None, confidence, reason)
 
@@ -174,10 +211,15 @@ def parse_llm_classifier_output(raw_text: str) -> dict[str, object]:
     return _build_response(intent, coin, confidence, reason)
 
 
-def classify_with_llm(message: str) -> dict[str, object]:
+def classify_with_llm(
+    message: str,
+    candidates: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     """Classify intent and coin using Gemini when rule-based signals are ambiguous."""
 
     print("[LLMClassifier] raw output received")
+    if candidates:
+        print("[LLMJudge] candidates received")
 
     client = get_gemini_client()
     if client is None:
@@ -187,14 +229,14 @@ def classify_with_llm(message: str) -> dict[str, object]:
     try:
         response = client.models.generate_content(
             model=GEMINI_MODEL,
-            contents=_build_prompt(message),
+            contents=_build_prompt(message, candidates=candidates),
         )
         raw_output = str(getattr(response, "text", "") or "").strip()
     except Exception:
         print("[LLMClassifier] invalid JSON")
         return _build_unknown("llm_error")
 
-    result = parse_llm_classifier_output(raw_output)
+    result = parse_llm_classifier_output(raw_output, message=message, candidates=candidates)
     reason = str(result.get("reason") or "").strip().lower()
     intent = str(result.get("intent") or "").strip().lower()
 
@@ -205,7 +247,7 @@ def classify_with_llm(message: str) -> dict[str, object]:
     print("[LLMClassifier] JSON parsed")
 
     if intent == "unsupported_coin" or reason == "coin_not_supported":
-        print("[LLMClassifier] known but unsupported coin detected")
+        print("[LLMJudge] unsupported coin detected")
         return result
 
     if reason == "unsupported_intent":
@@ -217,14 +259,20 @@ def classify_with_llm(message: str) -> dict[str, object]:
         return result
 
     if intent == "clarification_needed":
-        print("[LLMClassifier] rejected low confidence")
+        print("[LLMJudge] rejected fuzzy candidate")
+        return result
+
+    if reason == "candidate_mismatch":
+        print("[LLMJudge] rejected fuzzy candidate")
         return result
 
     if intent == "unknown" and reason == "low_confidence":
-        print("[LLMClassifier] rejected low confidence")
+        print("[LLMJudge] rejected fuzzy candidate")
         return result
 
     if intent in ALLOWED_INTENTS:
+        if candidates:
+            print("[LLMJudge] selected coin")
         print("[LLMClassifier] accepted")
         return result
 

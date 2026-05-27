@@ -86,8 +86,8 @@ class AgentAnalysisRoutingTest(unittest.TestCase):
         ) as handle_coin_analysis:
             result = route_user_message("user-1", "analyze usdt")
 
-        self.assertIn("目前支援的幣種", result)
-        handle_coin_analysis.assert_not_called()
+        self.assertEqual(result, "LEGACY_ANALYSIS_MESSAGE")
+        handle_coin_analysis.assert_called_once_with("usdt")
         run_agent_workflow.assert_not_called()
 
 
