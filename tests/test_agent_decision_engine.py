@@ -99,6 +99,31 @@ class DecisionEngineTest(unittest.TestCase):
         result = decide_user_intent("今天比特幣價格")
         self.assertEqual(result, {"intent": "price_query", "coin": "BTC", "confidence": 0.9})
 
+    def test_generic_unknown_ticker_becomes_unsupported_coin(self):
+        with patch(
+            "services.agent.decision_engine.semantic_resolver.resolve_coin_symbol",
+            return_value={"coin": None, "confidence": 0.0, "method": "none"},
+        ), patch(
+            "services.agent.decision_engine.classify_with_llm",
+            return_value={
+                "tasks": [{"intent": "price_query", "coin": None}],
+                "intent": "price_query",
+                "coin": None,
+                "confidence": 0.9,
+                "reason": "single_task_llm",
+            },
+        ):
+            result = decide_user_intent("hype 價格")
+
+        self.assertEqual(
+            result,
+            {
+                "intent": "unsupported_coin",
+                "coin": "HYPE",
+                "reason": "coin_not_supported",
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

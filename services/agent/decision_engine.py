@@ -20,6 +20,7 @@ from services.agent.unsupported_coin_service import (
     detect_unsupported_coin,
 )
 from services.agent.llm_intent_classifier import classify_with_llm
+from services.market.coin_catalog import is_supported_coin
 
 
 SUPPORTED_COINS = {
@@ -87,6 +88,38 @@ NATURAL_LANGUAGE_HINTS = {
     "我最愛",
     "最愛貨幣",
     "分析一下",
+}
+GENERIC_TICKER_STOPWORDS = {
+    "a",
+    "about",
+    "analysis",
+    "and",
+    "analyze",
+    "are",
+    "ask",
+    "at",
+    "by",
+    "for",
+    "from",
+    "help",
+    "how",
+    "i",
+    "in",
+    "is",
+    "me",
+    "my",
+    "of",
+    "on",
+    "or",
+    "please",
+    "price",
+    "prices",
+    "show",
+    "tell",
+    "the",
+    "today",
+    "what",
+    "with",
 }
 
 
@@ -193,6 +226,77 @@ def is_natural_language(message: str) -> bool:
             return True
 
     return False
+
+
+def _extract_generic_ticker(message: str) -> str | None:
+    normalized = str(message or "").strip()
+    if not normalized:
+        return None
+
+    candidates = re.findall(r"[A-Za-z]{3,10}", normalized)
+    for candidate in reversed(candidates):
+        ticker = candidate.strip().upper()
+        if not ticker or ticker.lower() in GENERIC_TICKER_STOPWORDS:
+            continue
+        print(f"[UnknownTickerExtractor] extracted ticker: {ticker}")
+        return ticker
+
+    return None
+
+
+def _apply_generic_ticker_extraction(
+    message: str,
+    llm_result: dict[str, object],
+) -> dict[str, object] | None:
+    intent = str(llm_result.get("intent") or "").strip().lower()
+    tasks = llm_result.get("tasks")
+
+    task_list: list[dict[str, object]] = []
+    if isinstance(tasks, list):
+        task_list = [dict(task or {}) for task in tasks]
+
+    needs_ticker = False
+    if task_list:
+        for task in task_list:
+            task_intent = str((task or {}).get("intent") or "").strip().lower()
+            task_coin = str((task or {}).get("coin") or "").strip().upper()
+            if task_intent in {"price_query", "market_analysis"} and not task_coin:
+                needs_ticker = True
+                break
+    elif intent in {"price_query", "market_analysis"} and not str(llm_result.get("coin") or "").strip():
+        needs_ticker = True
+
+    if not needs_ticker:
+        return llm_result
+
+    extracted_ticker = _extract_generic_ticker(message)
+    if not extracted_ticker:
+        return llm_result
+
+    if not is_supported_coin(extracted_ticker.lower()):
+        print("[DecisionEngine] route -> unsupported_coin")
+        return build_unsupported_coin_payload(extracted_ticker, reason="coin_not_supported")
+
+    if task_list:
+        enriched_tasks = []
+        for task in task_list:
+            enriched_task = dict(task)
+            task_intent = str(enriched_task.get("intent") or "").strip().lower()
+            task_coin = str(enriched_task.get("coin") or "").strip().upper()
+            if task_intent in {"price_query", "market_analysis"} and not task_coin:
+                enriched_task["coin"] = extracted_ticker
+            enriched_tasks.append(enriched_task)
+
+        updated_result = dict(llm_result)
+        updated_result["tasks"] = enriched_tasks
+        if len(enriched_tasks) == 1:
+            updated_result["intent"] = str(enriched_tasks[0].get("intent") or "unknown").strip().lower()
+            updated_result["coin"] = str(enriched_tasks[0].get("coin") or extracted_ticker).strip().upper()
+        return updated_result
+
+    updated_result = dict(llm_result)
+    updated_result["coin"] = extracted_ticker
+    return updated_result
 
 
 def _extract_rule_based_intent(
@@ -330,6 +434,9 @@ def decide_user_intent(message: str, user_state: dict | None = None):
             print("[DecisionEngine] natural-language detected")
         print("[DecisionEngine] routing to LLM-first path")
         llm_result = classify_with_llm(raw_text)
+        llm_result = _apply_generic_ticker_extraction(raw_text, llm_result)
+        if str(llm_result.get("intent") or "").strip().lower() == "unsupported_coin":
+            return llm_result
         llm_tasks = llm_result.get("tasks")
         if isinstance(llm_tasks, list) and llm_tasks:
             if len(llm_tasks) >= 2:
