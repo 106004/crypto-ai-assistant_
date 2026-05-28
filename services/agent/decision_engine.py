@@ -61,6 +61,34 @@ AMBIGUOUS_HINTS = {
     "跌嗎",
 }
 
+MULTI_INTENT_HINTS = {
+    "並",
+    "以及",
+    "還有",
+    "順便",
+    "跟",
+    "再",
+    "also",
+    "and",
+}
+
+FAST_PATH_SINGLE_WORD_COMMANDS = {"btc", "eth", "sol", "mycoin", "help"}
+FAST_PATH_TWO_WORD_COMMANDS = {
+    ("set", "btc"),
+    ("analyze", "btc"),
+}
+NATURAL_LANGUAGE_HINTS = {
+    "請",
+    "今天",
+    "幫我",
+    "看看",
+    "怎麼樣",
+    "告訴我",
+    "我最愛",
+    "最愛貨幣",
+    "分析一下",
+}
+
 
 def _build_result(intent: str, coin: str = "", confidence: float = 0.1) -> Dict[str, object]:
     return {
@@ -89,6 +117,82 @@ def _is_context_message(text: str) -> bool:
 
 def _should_infer_from_state(previous_intent: str) -> bool:
     return previous_intent in CONTEXT_ALLOWED_PREVIOUS_INTENTS
+
+
+def is_potential_multi_intent(message: str) -> bool:
+    normalized = _normalize_text(message)
+    if not normalized:
+        return False
+
+    for hint in MULTI_INTENT_HINTS:
+        if hint in {"also", "and"}:
+            if re.search(rf"\b{re.escape(hint)}\b", normalized):
+                return True
+            continue
+        if hint in normalized:
+            return True
+    return False
+
+
+def is_fast_path_command(message: str) -> bool:
+    normalized = _normalize_text(message)
+    if not normalized:
+        return False
+
+    collapsed = " ".join(normalized.split())
+    if collapsed in FAST_PATH_SINGLE_WORD_COMMANDS:
+        return True
+
+    tokens = collapsed.split()
+    if len(tokens) == 1:
+        coin_resolution = semantic_resolver.resolve_coin_symbol(collapsed)
+        if str(coin_resolution.get("coin") or "").strip().upper():
+            return True
+
+        unsupported = detect_unsupported_coin(collapsed)
+        if str(unsupported.get("coin") or "").strip().upper():
+            return True
+
+    if len(tokens) == 2 and tuple(tokens) in FAST_PATH_TWO_WORD_COMMANDS:
+        return True
+
+    if len(tokens) == 2 and tokens[0] in {"set", "analyze"}:
+        coin_text = tokens[1]
+        coin_resolution = semantic_resolver.resolve_coin_symbol(coin_text)
+        if str(coin_resolution.get("coin") or "").strip().upper():
+            return True
+
+        unsupported = detect_unsupported_coin(coin_text)
+        if str(unsupported.get("coin") or "").strip().upper():
+            return True
+
+    return False
+
+
+def is_natural_language(message: str) -> bool:
+    normalized = _normalize_text(message)
+    if not normalized or is_fast_path_command(message):
+        return False
+
+    if re.search(r"[?？]", message or ""):
+        return True
+
+    if is_potential_multi_intent(normalized):
+        return True
+
+    if any(hint in normalized for hint in NATURAL_LANGUAGE_HINTS):
+        return True
+
+    if re.search(r"[\u4e00-\u9fff]", message or ""):
+        return True
+
+    tokens = _tokenize(normalized)
+    if len(tokens) >= 3:
+        english_hints = {"please", "analyze", "analysis", "tell", "look", "how"}
+        if any(token in english_hints for token in tokens):
+            return True
+
+    return False
 
 
 def _extract_rule_based_intent(
@@ -158,6 +262,13 @@ def _build_clarification_result(
     candidates: list[dict[str, object]] | None = None,
 ) -> dict[str, object] | None:
     llm_result = classify_with_llm(message, candidates=candidates)
+    print(f"[DecisionEngine] classifier_result:\n{llm_result}")
+    llm_tasks = llm_result.get("tasks")
+    if isinstance(llm_tasks, list) and llm_tasks:
+        print(f"[DecisionEngine] multi-intent tasks received: {llm_tasks}")
+        print("[DecisionEngine] tasks detected")
+        return llm_result
+    print("[DecisionEngine] fallback to single-intent path")
     llm_reason = str(llm_result.get("reason") or "").strip().lower()
     llm_intent = str(llm_result.get("intent") or "").strip().lower()
 
@@ -208,9 +319,31 @@ def decide_user_intent(message: str, user_state: dict | None = None):
     tokens = _tokenize(normalized)
     previous_intent = str((user_state or {}).get("last_intent") or "").strip().lower()
 
-    rule_based = _extract_rule_based_intent(normalized, tokens, resolved_coin, previous_intent)
-    if rule_based is not None:
-        return rule_based
+    if is_fast_path_command(raw_text):
+        print("[DecisionEngine] fast-path command")
+        rule_based = _extract_rule_based_intent(normalized, tokens, resolved_coin, previous_intent)
+        if rule_based is not None:
+            return rule_based
+        print("[DecisionEngine] LLM failed, fallback to rule-based")
+    else:
+        if is_natural_language(raw_text):
+            print("[DecisionEngine] natural-language detected")
+        print("[DecisionEngine] routing to LLM-first path")
+        llm_result = classify_with_llm(raw_text)
+        llm_tasks = llm_result.get("tasks")
+        if isinstance(llm_tasks, list) and llm_tasks:
+            if len(llm_tasks) >= 2:
+                print("[DecisionEngine] multi-intent tasks accepted")
+            return llm_result
+
+        accepted_llm_result = _accept_llm_result(llm_result)
+        if accepted_llm_result.get("intent") != "unknown" or accepted_llm_result.get("coin"):
+            return accepted_llm_result
+
+        print("[DecisionEngine] LLM failed, fallback to rule-based")
+        rule_based = _extract_rule_based_intent(normalized, tokens, resolved_coin, previous_intent)
+        if rule_based is not None:
+            return rule_based
 
     if resolution_method == "fuzzy_candidates":
         fuzzy_result = _build_clarification_result(raw_text, candidates=resolution_candidates)

@@ -1,10 +1,7 @@
 """Workflow engine scaffold.
 
 Workflow engine is the Agent's flow controller.
-It takes a user message, asks the decision engine for an intent,
-looks up the matching tool, checks policy, runs the tool if allowed,
-and returns a structured result.
-This version is intentionally isolated from LINE flow, Gemini, and Supabase.
+It can execute a single intent or a sequential multi-intent task list.
 """
 
 from __future__ import annotations
@@ -13,16 +10,17 @@ from time import perf_counter
 
 from services.agent import agent_metrics
 from services.agent import agent_policy, decision_engine, state_manager, tool_registry
-from services.line.message_service import format_clarification_message
 from services.agent.unsupported_coin_service import build_unsupported_coin_message
+from services.line.analysis_service import handle_analysis_query
+from services.line.message_service import (
+    format_clarification_message,
+    format_unknown_command_message,
+)
+from services.line.price_service import handle_price_query
 
 
 def _execute_tool(intent: str, user_id: str, coin: str, tool):
-    """Run the tool for a supported intent.
-
-    This is a small dispatch layer so the workflow stays easy to follow.
-    The actual business logic still lives in the existing service functions.
-    """
+    """Run the tool for a supported single intent."""
 
     if intent in {"price_query", "market_analysis"}:
         return tool(coin)
@@ -39,12 +37,64 @@ def _execute_tool(intent: str, user_id: str, coin: str, tool):
     return None
 
 
-def _build_state_updates(intent: str, coin: str, extra_updates: dict | None = None):
-    """Build the minimal state update payload.
+def _normalize_task(task: dict[str, object]) -> dict[str, str]:
+    intent = str((task or {}).get("intent") or "").strip().lower()
+    coin = str((task or {}).get("coin") or "").strip().upper()
+    return {"intent": intent, "coin": coin}
 
-    We only write last_coin when we actually have a coin.
-    That keeps an unknown message from wiping the user's previous coin.
-    """
+
+def _task_label(intent: str, coin: str) -> str:
+    if intent == "price_query":
+        return f"{coin} price"
+    if intent == "market_analysis":
+        return f"{coin} analysis"
+    if intent == "unsupported_coin":
+        return f"{coin} unsupported coin"
+    if intent == "clarification_needed":
+        return "clarification needed"
+    return "unknown task"
+
+
+def _build_task_message(task: dict[str, str], result_text: str, total_tasks: int) -> str:
+    if total_tasks <= 1:
+        return result_text
+    return f"{_task_label(task['intent'], task['coin'])}\n{result_text}".strip()
+
+
+def _run_task(task: dict[str, object]) -> dict[str, object]:
+    normalized_task = _normalize_task(task)
+    intent = normalized_task["intent"]
+    coin = normalized_task["coin"]
+
+    if intent == "price_query":
+        return {"ok": True, "result": handle_price_query(coin)}
+
+    if intent == "market_analysis":
+        return {"ok": True, "result": handle_analysis_query(coin)}
+
+    if intent == "unsupported_coin":
+        return {"ok": True, "result": build_unsupported_coin_message(coin)}
+
+    if intent == "clarification_needed":
+        return {"ok": True, "result": format_clarification_message([], reason="low_confidence")}
+
+    if intent == "unknown":
+        return {"ok": True, "result": format_unknown_command_message()}
+
+    return {"ok": True, "result": format_unknown_command_message()}
+
+
+def _compose_task_results(task_results: list[dict[str, object]]) -> str:
+    sections = [
+        str(item.get("message") or "").strip()
+        for item in task_results
+        if str(item.get("message") or "").strip()
+    ]
+    return "\n\n".join(sections).strip()
+
+
+def _build_state_updates(intent: str, coin: str, extra_updates: dict | None = None):
+    """Build the minimal state update payload."""
 
     updates = {"last_intent": intent}
     if coin:
@@ -54,15 +104,102 @@ def _build_state_updates(intent: str, coin: str, extra_updates: dict | None = No
     return updates
 
 
-def run_agent_workflow(user_id: str, message: str):
-    """Run the current first-pass agent workflow.
+def execute_tasks(tasks: list[dict[str, object]], user_context: dict | None = None):
+    """Execute a multi-intent task list sequentially and compose one response."""
 
-    Flow:
-    1. decide intent
-    2. find tool for intent
-    3. execute tool
-    4. update short-term state
-    5. return a structured response
+    task_list = [dict(task or {}) for task in (tasks or [])]
+    user_context = dict(user_context or {})
+    user_id = str(user_context.get("user_id") or "").strip()
+
+    print(f"[WorkflowEngine] execute_tasks called: tasks_length={len(task_list)}")
+
+    if not task_list:
+        state = None
+        if user_id:
+            state = state_manager.update_user_state(user_id, _build_state_updates("unknown", ""))
+        return {
+            "intent": "unknown",
+            "coin": "",
+            "confidence": 0.0,
+            "tasks": [],
+            "results": [],
+            "result": format_unknown_command_message(),
+            "state": state,
+        }
+
+    task_results: list[dict[str, object]] = []
+    total_tasks = len(task_list)
+    any_success = False
+
+    for index, raw_task in enumerate(task_list, start=1):
+        task = _normalize_task(raw_task)
+        intent = task["intent"] or "unknown"
+        coin = task["coin"]
+        print(f"[WorkflowEngine] executing task {index}/{total_tasks}: intent={intent} coin={coin}")
+
+        try:
+            execution = _run_task(task)
+            task_message = _build_task_message(task, str(execution.get("result") or ""), total_tasks)
+            execution.update(
+                {
+                    "task": task,
+                    "intent": intent,
+                    "coin": coin,
+                    "message": task_message,
+                }
+            )
+            task_results.append(execution)
+            any_success = any_success or bool(execution.get("ok"))
+            agent_metrics.record_intent_usage(intent)
+            print("[WorkflowEngine] task completed")
+        except Exception as error:
+            failure_message = f"{_task_label(intent, coin)}\n分析失敗，請稍後再試。"
+            task_results.append(
+                {
+                    "task": task,
+                    "intent": intent,
+                    "coin": coin,
+                    "ok": False,
+                    "error": str(error),
+                    "message": failure_message,
+                }
+            )
+            agent_metrics.record_intent_usage(intent)
+            agent_metrics.record_fallback(intent)
+            print("[WorkflowEngine] task failed")
+
+    combined_result = _compose_task_results(task_results)
+    print("[WorkflowEngine] combined response generated")
+
+    last_task = task_results[-1]["task"] if task_results else {"intent": "unknown", "coin": ""}
+    last_intent = str((last_task or {}).get("intent") or "unknown").strip().lower() or "unknown"
+    last_coin = str((last_task or {}).get("coin") or "").strip().upper()
+
+    state = None
+    if user_id:
+        state = state_manager.update_user_state(
+            user_id,
+            _build_state_updates(last_intent, last_coin),
+        )
+        print("[AgentWorkflow] state updated")
+
+    confidence = 0.9 if any_success else 0.0
+    overall_intent = last_intent if total_tasks == 1 else "multi_task"
+    return {
+        "intent": overall_intent,
+        "coin": last_coin,
+        "confidence": confidence,
+        "tasks": task_list,
+        "results": task_results,
+        "result": combined_result,
+        "state": state,
+    }
+
+
+def run_agent_workflow(user_id: str, message: str):
+    """Run the current workflow.
+
+    This supports both the legacy single-intent path and the new multi-task path.
     """
 
     start_time = perf_counter()
@@ -71,18 +208,33 @@ def run_agent_workflow(user_id: str, message: str):
     confidence = 0.0
     workflow_success = False
     try:
-        # Step 1: Read the user's current short-term memory first.
-        # The decision engine can use this to resolve vague follow-up messages.
         user_state_before = state_manager.get_user_state(user_id)
 
-        # Step 2: Ask the decision engine what the user likely wants.
         decision = decision_engine.decide_user_intent(message, user_state=user_state_before)
         intent = str(decision.get("intent") or "unknown").strip().lower()
         coin = str(decision.get("coin") or "").strip().upper()
         confidence = float(decision.get("confidence") or 0.0)
         candidates = list(decision.get("candidates") or [])
+        tasks = list(decision.get("tasks") or [])
         agent_metrics.record_intent_usage(intent)
         print(f"[AgentWorkflow] intent decided: {intent}")
+
+        if tasks:
+            multi_result = execute_tasks(
+                tasks,
+                user_context={
+                    "user_id": user_id,
+                    "user_state": user_state_before,
+                },
+            )
+            workflow_success = any(bool(item.get("ok")) for item in multi_result.get("results", []))
+            print(f"[WorkflowEngine] execute_tasks returned: tasks_length={len(tasks)}")
+            if workflow_success:
+                agent_metrics.record_workflow_success("multi_task")
+            else:
+                agent_metrics.record_workflow_failure("multi_task")
+                agent_metrics.record_fallback("multi_task")
+            return multi_result
 
         if intent == "clarification_needed":
             print("[Clarification] clarification triggered")
@@ -129,10 +281,7 @@ def run_agent_workflow(user_id: str, message: str):
                 "state": state,
             }
 
-        # Step 3: Look up the matching tool from the registry.
         tool = tool_registry.get_tool_for_intent(intent)
-
-        # Step 4: Ask the policy layer whether this intent is allowed.
         policy_decision = agent_policy.should_execute_intent(
             intent,
             context={
@@ -141,7 +290,6 @@ def run_agent_workflow(user_id: str, message: str):
             },
         )
 
-        # Step 5: If policy blocks execution, return a safe blocked response.
         if not policy_decision.get("allowed", False):
             agent_metrics.record_fallback(intent)
             state = state_manager.update_user_state(
@@ -159,7 +307,6 @@ def run_agent_workflow(user_id: str, message: str):
                 "state": state,
             }
 
-        # Step 6: Execute the tool if we have one; otherwise fall back safely.
         result = "unknown_intent"
         if tool is not None:
             result = _execute_tool(intent, user_id, coin, tool)
@@ -167,7 +314,6 @@ def run_agent_workflow(user_id: str, message: str):
         else:
             agent_metrics.record_fallback(intent)
 
-        # Step 7: Update the agent's short-term memory after every workflow run.
         state = state_manager.update_user_state(
             user_id,
             _build_state_updates(intent, coin),
@@ -176,7 +322,6 @@ def run_agent_workflow(user_id: str, message: str):
         agent_metrics.record_workflow_success(intent)
         workflow_success = True
 
-        # Step 8: Return everything the caller may need.
         return {
             "intent": intent,
             "coin": coin,

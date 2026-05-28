@@ -18,6 +18,13 @@ ALLOWED_INTENTS = {
     "help",
     "unknown",
 }
+ALLOWED_TASK_INTENTS = {
+    "price_query",
+    "market_analysis",
+    "unsupported_coin",
+    "clarification_needed",
+    "unknown",
+}
 SUPPORTED_COINS = {
     "BTC",
     "ETH",
@@ -85,6 +92,81 @@ def _normalize_coin(raw_coin: Any) -> str | None:
     return coin
 
 
+def _normalize_task_intent(raw_intent: Any) -> str:
+    intent = str(raw_intent or "").strip().lower()
+    if intent not in ALLOWED_TASK_INTENTS:
+        return ""
+    return intent
+
+
+def _normalize_task_coin(raw_coin: Any) -> str | None:
+    return _normalize_coin(raw_coin)
+
+
+def _compatibility_confidence(intent: str) -> float:
+    if intent == "unknown":
+        return 0.0
+    if intent == "clarification_needed":
+        return 0.7
+    if intent == "unsupported_coin":
+        return 0.99
+    return 0.9
+
+
+def _normalize_tasks_payload(payload_tasks: Any) -> list[dict[str, object]] | None:
+    if not isinstance(payload_tasks, list) or not payload_tasks:
+        return None
+
+    for raw_task in payload_tasks:
+        if not isinstance(raw_task, dict):
+            continue
+
+        intent = _normalize_task_intent(raw_task.get("intent"))
+        if intent != "unsupported_coin":
+            continue
+
+        coin = _normalize_task_coin(raw_task.get("coin"))
+        if coin is None or coin in SUPPORTED_COINS:
+            return None
+        return [{"intent": "unsupported_coin", "coin": coin}]
+
+    normalized_tasks: list[dict[str, object]] = []
+    for raw_task in payload_tasks:
+        if not isinstance(raw_task, dict):
+            return None
+
+        intent = _normalize_task_intent(raw_task.get("intent"))
+        if not intent:
+            return None
+
+        coin = _normalize_task_coin(raw_task.get("coin"))
+        if intent in {"price_query", "market_analysis", "unsupported_coin"} and coin is None:
+            return None
+
+        if intent in {"price_query", "market_analysis"} and coin not in SUPPORTED_COINS:
+            return None
+
+        normalized_tasks.append({"intent": intent, "coin": coin})
+
+    if normalized_tasks and normalized_tasks[0]["intent"] in {"clarification_needed", "unknown"}:
+        return [normalized_tasks[0]]
+
+    return normalized_tasks
+
+
+def _build_tasks_response(tasks: list[dict[str, object]]) -> dict[str, object]:
+    primary_task = tasks[0]
+    primary_intent = str(primary_task.get("intent") or "unknown").strip().lower()
+    primary_coin = _normalize_coin(primary_task.get("coin"))
+    return {
+        "tasks": tasks,
+        "intent": primary_intent,
+        "coin": primary_coin,
+        "confidence": _compatibility_confidence(primary_intent),
+        "reason": "multi_intent_tasks",
+    }
+
+
 def _normalize_confidence(raw_confidence: Any) -> tuple[float | None, str | None]:
     if raw_confidence is None:
         return None, "missing_confidence"
@@ -113,21 +195,25 @@ def _format_candidates(candidates: list[dict[str, object]] | None) -> str:
 def _build_prompt(message: str, candidates: list[dict[str, object]] | None = None) -> str:
     return (
         "You are intent classifier.\n"
+        "Analyze the user's message for multiple intents.\n"
+        "If there are multiple intents, output them in the same order as the user's meaning.\n"
         "Please only output JSON.\n"
         "Do not explain.\n"
         "Do not check prices.\n"
         "Do not analyze the market.\n"
         "Do not give investment advice.\n"
+        "Return tasks only.\n"
+        "If there is only one intent, tasks must still contain exactly one item.\n"
+        "Each task must contain intent and coin.\n"
+        "Use one of these task intents: price_query, market_analysis, unsupported_coin, clarification_needed, unknown.\n"
+        "If the coin is unknown, set coin to null.\n"
         "Use the original message and the candidate coins if provided.\n"
         "If a candidate looks similar but does not fit the user's meaning, do not select it.\n"
         "If the coin is known but unsupported, return unsupported_coin.\n"
         "\n"
         "Return this JSON schema exactly:\n"
         '{'
-        '"intent":"price_query | market_analysis | set_favorite_coin | get_favorite_coin | help | unknown",'
-        '"coin":"any coin symbol or null",'
-        '"confidence":0.0,'
-        '"reason":"..."'
+        '"tasks":[{"intent":"price_query | market_analysis | unsupported_coin | clarification_needed | unknown","coin":"any coin symbol or null"}]'
         '}\n'
         "\n"
         f"Candidate coins: {_format_candidates(candidates)}\n"
@@ -143,6 +229,7 @@ def parse_llm_classifier_output(
     """Parse and validate a Gemini classifier payload."""
 
     json_text = _extract_json_text(raw_text)
+    print(f"[LLMClassifier] raw response:\n{raw_text}")
     if json_text is None:
         return _build_unknown("invalid_json")
 
@@ -153,6 +240,13 @@ def parse_llm_classifier_output(
 
     if not isinstance(payload, dict):
         return _build_unknown("invalid_json")
+
+    print(f"[LLMClassifier] parsed JSON:\n{payload}")
+
+    payload_tasks = _normalize_tasks_payload(payload.get("tasks"))
+    if payload_tasks is not None:
+        print(f"[LLMClassifier] parsed tasks:\n{payload_tasks}")
+        return _build_tasks_response(payload_tasks)
 
     raw_intent = payload.get("intent")
     raw_coin = payload.get("coin")
@@ -244,6 +338,9 @@ def classify_with_llm(
         print("[LLMClassifier] invalid JSON")
         return result
 
+    print(f"[LLMClassifier] final classifier output:\n{result}")
+    if "tasks" in result:
+        print("[LLMClassifier] multi-intent tasks parsed")
     print("[LLMClassifier] JSON parsed")
 
     if intent == "unsupported_coin" or reason == "coin_not_supported":
