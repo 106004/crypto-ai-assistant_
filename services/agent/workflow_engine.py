@@ -17,6 +17,7 @@ from services.line.message_service import (
     format_unknown_command_message,
 )
 from services.line.price_service import handle_price_query
+from services.market.coin_catalog import is_supported_coin
 
 
 def _execute_tool(intent: str, user_id: str, coin: str, tool):
@@ -65,6 +66,10 @@ def _run_task(task: dict[str, object]) -> dict[str, object]:
     normalized_task = _normalize_task(task)
     intent = normalized_task["intent"]
     coin = normalized_task["coin"]
+
+    if intent in {"price_query", "market_analysis"} and coin and not is_supported_coin(coin.lower()):
+        print("[WorkflowEngine] unsupported coin task short-circuited")
+        return {"ok": True, "result": build_unsupported_coin_message(coin)}
 
     if intent == "price_query":
         return {"ok": True, "result": handle_price_query(coin)}

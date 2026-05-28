@@ -377,6 +377,7 @@ def _build_clarification_result(
     llm_intent = str(llm_result.get("intent") or "").strip().lower()
 
     if llm_intent == "unsupported_coin" or llm_reason == "coin_not_supported":
+        print("[DecisionEngine] route -> unsupported_coin")
         return llm_result
 
     if llm_intent == "clarification_needed" or llm_reason in {"low_confidence", "candidate_mismatch"}:
@@ -405,6 +406,7 @@ def _build_unsupported_coin_result(message: str) -> dict[str, object] | None:
         return None
 
     print(f"[UnsupportedCoin] unsupported coin detected coin={coin}")
+    print("[DecisionEngine] route -> unsupported_coin")
     return build_unsupported_coin_payload(coin, reason="coin_not_supported")
 
 

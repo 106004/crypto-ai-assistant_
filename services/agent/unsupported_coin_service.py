@@ -44,6 +44,7 @@ UNSUPPORTED_COIN_ALIASES = {
 _ALIASES_BY_LOWER = {alias.lower(): symbol for alias, symbol in UNSUPPORTED_COIN_ALIASES.items()}
 _ALIASES = sorted({alias.lower() for alias in UNSUPPORTED_COIN_ALIASES})
 _SUPPORTED_COIN_TEXT = " / ".join(SUPPORTED_COIN_CODES)
+DEFAULT_UNSUPPORTED_COIN_REASON = "coin_not_supported"
 
 
 def _build_none_result() -> dict[str, object]:
@@ -102,7 +103,10 @@ def detect_unsupported_coin(message: str) -> dict[str, object]:
     return _build_none_result()
 
 
-def build_unsupported_coin_payload(coin: str, reason: str = "coin_not_supported") -> dict[str, object]:
+def build_unsupported_coin_payload(
+    coin: str,
+    reason: str = DEFAULT_UNSUPPORTED_COIN_REASON,
+) -> dict[str, object]:
     normalized_coin = str(coin or "").strip().upper()
     return {
         "intent": "unsupported_coin",

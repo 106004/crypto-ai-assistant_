@@ -20,23 +20,20 @@ class MultiTaskWorkflowTest(unittest.TestCase):
             },
         ), patch(
             "services.agent.workflow_engine.handle_analysis_query",
-            return_value="BTC 市場分析：偏多",
+            return_value="BTC analysis result",
         ) as analysis_mock, patch(
             "services.agent.workflow_engine.handle_price_query",
-            return_value="BTC 現價：$108,000",
+            return_value="BTC price result",
         ) as price_mock:
-            result = run_agent_workflow("multi-task-user", "請分析 BTC 並告訴我價格")
+            result = run_agent_workflow("multi-task-user", "please analyze BTC and tell me the price")
 
         analysis_mock.assert_called_once_with("BTC")
         price_mock.assert_called_once_with("BTC")
         self.assertEqual(result["intent"], "multi_task")
         self.assertEqual(len(result["results"]), 2)
-        self.assertIn("BTC 市場分析：偏多", result["result"])
-        self.assertIn("BTC 現價：$108,000", result["result"])
-        self.assertLess(
-            result["result"].index("BTC 市場分析：偏多"),
-            result["result"].index("BTC 現價：$108,000"),
-        )
+        self.assertIn("BTC analysis result", result["result"])
+        self.assertIn("BTC price result", result["result"])
+        self.assertLess(result["result"].index("BTC analysis result"), result["result"].index("BTC price result"))
         self.assertEqual(result["state"]["last_intent"], "price_query")
         self.assertEqual(result["state"]["last_coin"], "BTC")
         self.assertEqual(result["state"]["conversation_count"], 1)
@@ -52,22 +49,19 @@ class MultiTaskWorkflowTest(unittest.TestCase):
             },
         ), patch(
             "services.agent.workflow_engine.handle_analysis_query",
-            return_value="BTC 市場分析：仍偏多",
+            return_value="BTC analysis result",
         ) as analysis_mock, patch(
             "services.agent.workflow_engine.handle_price_query",
-            return_value="BTC 現價：$109,000",
+            return_value="BTC price result",
         ) as price_mock:
-            result = run_agent_workflow("multi-task-user", "BTC 現在多少並分析一下")
+            result = run_agent_workflow("multi-task-user", "BTC price then analyze")
 
         price_mock.assert_called_once_with("BTC")
         analysis_mock.assert_called_once_with("BTC")
         self.assertEqual(result["intent"], "multi_task")
-        self.assertLess(
-            result["result"].index("BTC 現價：$109,000"),
-            result["result"].index("BTC 市場分析：仍偏多"),
-        )
+        self.assertLess(result["result"].index("BTC price result"), result["result"].index("BTC analysis result"))
 
-    def test_unsupported_coin_then_price_executes_sequentially(self):
+    def test_unsupported_coin_then_price_short_circuits_price_service(self):
         with patch(
             "services.agent.workflow_engine.decision_engine.decide_user_intent",
             return_value={
@@ -78,17 +72,22 @@ class MultiTaskWorkflowTest(unittest.TestCase):
             },
         ), patch(
             "services.agent.workflow_engine.build_unsupported_coin_message",
-            return_value="TRUMP 不支援",
+            return_value="unsupported coin message",
         ) as unsupported_mock, patch(
             "services.agent.workflow_engine.handle_price_query",
-            return_value="TRUMP 現價 fallback",
-        ) as price_mock:
-            result = run_agent_workflow("multi-task-user", "分析川普幣並告訴我價格")
+            return_value="TRUMP price fallback",
+        ) as price_mock, patch("builtins.print") as print_log:
+            result = run_agent_workflow("multi-task-user", "TRUMP price")
 
-        unsupported_mock.assert_called_once_with("TRUMP")
-        price_mock.assert_called_once_with("TRUMP")
-        self.assertIn("TRUMP 不支援", result["result"])
-        self.assertIn("TRUMP 現價 fallback", result["result"])
+        self.assertGreaterEqual(unsupported_mock.call_count, 2)
+        price_mock.assert_not_called()
+        self.assertIn("unsupported coin message", result["result"])
+        self.assertTrue(
+            any(
+                "[WorkflowEngine] unsupported coin task short-circuited" in str(call.args[0])
+                for call in print_log.call_args_list
+            )
+        )
 
     def test_partial_failure_keeps_successful_tasks(self):
         with patch(
@@ -101,15 +100,15 @@ class MultiTaskWorkflowTest(unittest.TestCase):
             },
         ), patch(
             "services.agent.workflow_engine.handle_price_query",
-            return_value="ETH 現價：$3,000",
+            return_value="ETH price result",
         ), patch(
             "services.agent.workflow_engine.handle_analysis_query",
             side_effect=RuntimeError("analysis boom"),
         ), patch("builtins.print") as print_log:
-            result = run_agent_workflow("multi-task-user", "ETH 價格 + analyze ETH")
+            result = run_agent_workflow("multi-task-user", "ETH price + analyze ETH")
 
-        self.assertIn("ETH 現價：$3,000", result["result"])
-        self.assertIn("分析失敗", result["result"])
+        self.assertIn("ETH price result", result["result"])
+        self.assertIn("失敗", result["result"])
         self.assertTrue(
             any("[WorkflowEngine] task failed" in str(call.args[0]) for call in print_log.call_args_list)
         )

@@ -140,11 +140,18 @@ def _normalize_tasks_payload(payload_tasks: Any) -> list[dict[str, object]] | No
             return None
 
         coin = _normalize_task_coin(raw_task.get("coin"))
-        if intent in {"price_query", "market_analysis", "unsupported_coin"} and coin is None:
-            return None
+        if intent in {"price_query", "market_analysis"}:
+            if coin is not None and coin not in SUPPORTED_COINS:
+                normalized_tasks.append({"intent": "unsupported_coin", "coin": coin})
+                continue
+            normalized_tasks.append({"intent": intent, "coin": coin})
+            continue
 
-        if intent in {"price_query", "market_analysis"} and coin not in SUPPORTED_COINS:
-            return None
+        if intent == "unsupported_coin":
+            if coin is None or coin in SUPPORTED_COINS:
+                return None
+            normalized_tasks.append({"intent": "unsupported_coin", "coin": coin})
+            continue
 
         normalized_tasks.append({"intent": intent, "coin": coin})
 
@@ -158,12 +165,13 @@ def _build_tasks_response(tasks: list[dict[str, object]]) -> dict[str, object]:
     primary_task = tasks[0]
     primary_intent = str(primary_task.get("intent") or "unknown").strip().lower()
     primary_coin = _normalize_coin(primary_task.get("coin"))
+    reason = "coin_not_supported" if len(tasks) == 1 and primary_intent == "unsupported_coin" else "multi_intent_tasks"
     return {
         "tasks": tasks,
         "intent": primary_intent,
         "coin": primary_coin,
         "confidence": _compatibility_confidence(primary_intent),
-        "reason": "multi_intent_tasks",
+        "reason": reason,
     }
 
 

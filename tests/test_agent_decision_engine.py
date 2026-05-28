@@ -124,6 +124,33 @@ class DecisionEngineTest(unittest.TestCase):
             },
         )
 
+    def test_llm_tasks_with_unsupported_coin_become_unsupported_coin(self):
+        with patch(
+            "services.agent.decision_engine.semantic_resolver.resolve_coin_symbol",
+            return_value={"coin": None, "confidence": 0.0, "method": "none"},
+        ), patch(
+            "services.agent.decision_engine.classify_with_llm",
+            return_value={
+                "tasks": [{"intent": "price_query", "coin": "ZEC"}],
+                "intent": "unsupported_coin",
+                "coin": "ZEC",
+                "confidence": 0.99,
+                "reason": "coin_not_supported",
+            },
+        ):
+            result = decide_user_intent("ZEC 價格")
+
+        self.assertEqual(
+            result,
+            {
+                "tasks": [{"intent": "price_query", "coin": "ZEC"}],
+                "intent": "unsupported_coin",
+                "coin": "ZEC",
+                "confidence": 0.99,
+                "reason": "coin_not_supported",
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

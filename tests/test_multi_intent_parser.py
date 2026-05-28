@@ -82,6 +82,17 @@ class MultiIntentParserTest(unittest.TestCase):
 
         self.assertEqual(result["tasks"], [{"intent": "unsupported_coin", "coin": "TRUMP"}])
 
+    def test_price_task_with_unsupported_coin_becomes_unsupported_coin(self):
+        result = self._classify(
+            "ZEC 價格",
+            '{"tasks":[{"intent":"price_query","coin":"ZEC"}]}',
+        )
+
+        self.assertEqual(result["intent"], "unsupported_coin")
+        self.assertEqual(result["coin"], "ZEC")
+        self.assertEqual(result["reason"], "coin_not_supported")
+        self.assertEqual(result["tasks"], [{"intent": "unsupported_coin", "coin": "ZEC"}])
+
     def test_gibberish_returns_unknown_task(self):
         result = self._classify(
             "ajsdhajksd123@@@",
