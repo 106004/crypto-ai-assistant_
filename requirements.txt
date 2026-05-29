@@ -1,4 +1,5 @@
 flask
+fastapi
 requests
 python-dotenv
 apscheduler
@@ -6,3 +7,4 @@ line-bot-sdk
 supabase
 gunicorn
 google-genai
+uvicorn

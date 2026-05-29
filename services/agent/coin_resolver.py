@@ -61,7 +61,22 @@ def _extract_generic_ticker(message: str) -> str | None:
     return None
 
 
-def resolve_coin(message: str) -> dict[str, object]:
+def _debug_step(
+    step: str,
+    executed: bool,
+    matched: bool,
+    **extra: object,
+) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "step": step,
+        "executed": executed,
+        "matched": matched,
+    }
+    entry.update(extra)
+    return entry
+
+
+def resolve_coin(message: str, debug: bool = False) -> dict[str, object]:
     """Parse coin signals from a raw message without deciding workflow."""
 
     raw = _normalize(message)
@@ -73,6 +88,13 @@ def resolve_coin(message: str) -> dict[str, object]:
             "confidence": 0.0,
             "method": "none",
         }
+        if debug:
+            result["debug_trace"] = [
+                _debug_step("exact_match", False, False),
+                _debug_step("fuzzy_candidates", False, False, candidates=[]),
+                _debug_step("ticker_extraction", False, False),
+                _debug_step("gemini_fallback", False, False, error=None),
+            ]
         print("[CoinResolver] resolved coin: none")
         print("[CoinResolver] resolved: none")
         return result
@@ -87,6 +109,19 @@ def resolve_coin(message: str) -> dict[str, object]:
             "confidence": float(unsupported_alias.get("confidence") or 0.0),
             "method": str(unsupported_alias.get("method") or "exact"),
         }
+        if debug:
+            result["debug_trace"] = [
+                _debug_step(
+                    "exact_match",
+                    True,
+                    True,
+                    source="unsupported_alias",
+                    coin=unsupported_coin,
+                ),
+                _debug_step("fuzzy_candidates", False, False, candidates=[]),
+                _debug_step("ticker_extraction", False, False),
+                _debug_step("gemini_fallback", False, False, error=None),
+            ]
         print(f"[CoinResolver] resolved coin: {unsupported_coin}")
         print(f"[CoinResolver] resolved: {unsupported_coin}")
         return result
@@ -103,6 +138,18 @@ def resolve_coin(message: str) -> dict[str, object]:
             "method": semantic_method,
             "candidates": semantic.get("candidates") or [],
         }
+        if debug:
+            result["debug_trace"] = [
+                _debug_step("exact_match", True, False, source="semantic"),
+                _debug_step(
+                    "fuzzy_candidates",
+                    True,
+                    True,
+                    candidates=semantic.get("candidates") or [],
+                ),
+                _debug_step("ticker_extraction", False, False),
+                _debug_step("gemini_fallback", False, False, error=None),
+            ]
         print("[CoinResolver] resolved coin: fuzzy_candidates")
         print("[CoinResolver] resolved: fuzzy_candidates")
         return result
@@ -115,6 +162,13 @@ def resolve_coin(message: str) -> dict[str, object]:
             "confidence": float(semantic.get("confidence") or 0.0),
             "method": semantic_method,
         }
+        if debug:
+            result["debug_trace"] = [
+                _debug_step("exact_match", True, True, source="semantic", coin=semantic_coin),
+                _debug_step("fuzzy_candidates", False, False, candidates=[]),
+                _debug_step("ticker_extraction", False, False),
+                _debug_step("gemini_fallback", False, False, error=None),
+            ]
         print(f"[CoinResolver] resolved coin: {semantic_coin}")
         print(f"[CoinResolver] resolved: {semantic_coin}")
         return result
@@ -129,6 +183,18 @@ def resolve_coin(message: str) -> dict[str, object]:
             "confidence": 0.5,
             "method": "generic",
         }
+        if debug:
+            result["debug_trace"] = [
+                _debug_step("exact_match", True, False, source="semantic"),
+                _debug_step("fuzzy_candidates", True, False, candidates=[]),
+                _debug_step(
+                    "ticker_extraction",
+                    True,
+                    True,
+                    ticker=generic_ticker,
+                ),
+                _debug_step("gemini_fallback", False, False, error=None),
+            ]
         print(f"[CoinResolver] resolved coin: {generic_ticker}")
         print(f"[CoinResolver] resolved: {generic_ticker}")
         return result
@@ -140,6 +206,13 @@ def resolve_coin(message: str) -> dict[str, object]:
         "confidence": 0.0,
         "method": "none",
     }
+    if debug:
+        result["debug_trace"] = [
+            _debug_step("exact_match", True, False, source="semantic"),
+            _debug_step("fuzzy_candidates", True, False, candidates=[]),
+            _debug_step("ticker_extraction", True, False),
+            _debug_step("gemini_fallback", False, False, error=None),
+        ]
     print("[CoinResolver] resolved coin: none")
     print("[CoinResolver] resolved: none")
     return result
