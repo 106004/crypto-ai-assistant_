@@ -49,6 +49,7 @@ COIN_ALIASES = {
     "ADA": "ADA",
     "cardano": "ADA",
     "艾達幣": "ADA",
+    "愛達幣": "ADA",
     # TON
     "ton": "TON",
     "TON": "TON",

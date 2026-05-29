@@ -143,7 +143,7 @@ class DecisionEngineTest(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                "tasks": [{"intent": "price_query", "coin": "ZEC"}],
+                "tasks": [{"intent": "unsupported_coin", "coin": "ZEC"}],
                 "intent": "unsupported_coin",
                 "coin": "ZEC",
                 "confidence": 0.99,

@@ -15,26 +15,14 @@ from services.agent.clarification_service import (
     build_clarification_payload,
     suggest_clarification_candidates,
 )
-from services.agent.unsupported_coin_service import (
-    build_unsupported_coin_payload,
-    detect_unsupported_coin,
-)
+from services.agent.coin_validator import validate_coin_task
+from services.agent.coin_resolver import resolve_coin
+from services.agent.intent_resolver import resolve_intent
 from services.agent.llm_intent_classifier import classify_with_llm
+from services.agent.unsupported_coin_service import detect_unsupported_coin
 from services.market.coin_catalog import is_supported_coin
 
 
-SUPPORTED_COINS = {
-    "BTC",
-    "ETH",
-    "SOL",
-    "DOGE",
-    "BNB",
-    "XRP",
-    "ADA",
-    "TON",
-    "TRX",
-    "AVAX",
-}
 ALLOWED_LLM_INTENTS = {
     "price_query",
     "market_analysis",
@@ -152,6 +140,106 @@ def _should_infer_from_state(previous_intent: str) -> bool:
     return previous_intent in CONTEXT_ALLOWED_PREVIOUS_INTENTS
 
 
+def _is_ascii_text(text: str) -> bool:
+    return all(ord(char) < 128 for char in str(text or ""))
+
+
+def _is_plain_single_token_message(message: str) -> bool:
+    tokens = str(message or "").strip().split()
+    return len(tokens) == 1 and bool(tokens[0])
+
+
+def _should_attempt_llm_first(
+    raw_text: str,
+    intent_signal: dict[str, object],
+    coin_signal: dict[str, object],
+) -> bool:
+    intent = str(intent_signal.get("intent") or "unknown").strip().lower()
+    reason = str(intent_signal.get("reason") or "").strip().lower()
+    matched_intents = [
+        str(item or "").strip().lower()
+        for item in (intent_signal.get("matched_intents") or [])
+        if str(item or "").strip()
+    ]
+    coin = str(coin_signal.get("coin") or "").strip().upper()
+    method = str(coin_signal.get("method") or "").strip().lower()
+    token_count = len(str(raw_text or "").strip().split())
+
+    if intent == "help":
+        return False
+
+    if reason == "multiple_keywords" or len(matched_intents) > 1:
+        return True
+
+    if method == "fuzzy_candidates":
+        return True
+
+    if not coin:
+        return not _is_ascii_text(raw_text)
+
+    if _is_plain_single_token_message(raw_text) and _is_ascii_text(raw_text):
+        return False
+
+    if not _is_ascii_text(raw_text):
+        return True
+
+    if token_count > 1 and not is_supported_coin(coin.lower()):
+        return True
+
+    return False
+
+
+def _build_unsupported_coin_result(
+    result: dict[str, object],
+) -> dict[str, object]:
+    payload = {
+        "intent": "unsupported_coin",
+        "coin": str(result.get("coin") or "").strip().upper(),
+        "reason": "coin_not_supported",
+    }
+
+    if "tasks" in result:
+        payload["tasks"] = result.get("tasks")
+
+    confidence = result.get("confidence")
+    if confidence is not None:
+        try:
+            payload["confidence"] = float(confidence)
+        except (TypeError, ValueError):
+            pass
+
+    return payload
+
+
+def _validate_task_list_result(result: dict[str, object]) -> dict[str, object]:
+    tasks = result.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        return result
+
+    validated_tasks = [validate_coin_task(dict(task or {})) for task in tasks]
+    updated_result = dict(result)
+    updated_result["tasks"] = [
+        {
+            "intent": str(task.get("intent") or "unknown").strip().lower(),
+            "coin": task.get("coin"),
+        }
+        for task in validated_tasks
+    ]
+
+    primary_task = updated_result["tasks"][0]
+    updated_result["intent"] = str(primary_task.get("intent") or "unknown").strip().lower()
+    updated_result["coin"] = str(primary_task.get("coin") or "").strip().upper() or None
+
+    if len(updated_result["tasks"]) == 1 and updated_result["intent"] == "unsupported_coin":
+        updated_result["reason"] = "coin_not_supported"
+        return _build_unsupported_coin_result(updated_result)
+
+    if len(updated_result["tasks"]) > 1:
+        updated_result["reason"] = "multi_intent_tasks"
+
+    return updated_result
+
+
 def is_potential_multi_intent(message: str) -> bool:
     normalized = _normalize_text(message)
     if not normalized:
@@ -182,10 +270,6 @@ def is_fast_path_command(message: str) -> bool:
         if str(coin_resolution.get("coin") or "").strip().upper():
             return True
 
-        unsupported = detect_unsupported_coin(collapsed)
-        if str(unsupported.get("coin") or "").strip().upper():
-            return True
-
     if len(tokens) == 2 and tuple(tokens) in FAST_PATH_TWO_WORD_COMMANDS:
         return True
 
@@ -193,10 +277,6 @@ def is_fast_path_command(message: str) -> bool:
         coin_text = tokens[1]
         coin_resolution = semantic_resolver.resolve_coin_symbol(coin_text)
         if str(coin_resolution.get("coin") or "").strip().upper():
-            return True
-
-        unsupported = detect_unsupported_coin(coin_text)
-        if str(unsupported.get("coin") or "").strip().upper():
             return True
 
     return False
@@ -244,6 +324,29 @@ def _extract_generic_ticker(message: str) -> str | None:
     return None
 
 
+def _extract_generic_coin_candidate(message: str) -> str | None:
+    raw = str(message or "").strip()
+    if not raw:
+        return None
+
+    if re.search(r"\d", raw):
+        return None
+
+    candidates = re.findall(r"(?<![A-Za-z])[A-Za-z]{3,5}(?![A-Za-z])", raw)
+    for candidate in candidates:
+        ticker = candidate.strip().upper()
+        if not ticker or ticker.lower() in GENERIC_TICKER_STOPWORDS:
+            continue
+        return ticker
+
+    return None
+
+
+def _coin_from_unsupported_alias(message: str) -> str | None:
+    unsupported = detect_unsupported_coin(message)
+    return str(unsupported.get("coin") or "").strip().upper() or None
+
+
 def _apply_generic_ticker_extraction(
     message: str,
     llm_result: dict[str, object],
@@ -273,10 +376,6 @@ def _apply_generic_ticker_extraction(
     if not extracted_ticker:
         return llm_result
 
-    if not is_supported_coin(extracted_ticker.lower()):
-        print("[DecisionEngine] route -> unsupported_coin")
-        return build_unsupported_coin_payload(extracted_ticker, reason="coin_not_supported")
-
     if task_list:
         enriched_tasks = []
         for task in task_list:
@@ -287,69 +386,192 @@ def _apply_generic_ticker_extraction(
                 enriched_task["coin"] = extracted_ticker
             enriched_tasks.append(enriched_task)
 
+        validated_tasks = [validate_coin_task(task) for task in enriched_tasks]
+        unsupported_task = next(
+            (
+                task
+                for task in validated_tasks
+                if str(task.get("intent") or "").strip().lower() == "unsupported_coin"
+            ),
+            None,
+        )
+        if unsupported_task is not None:
+            return {
+                "intent": "unsupported_coin",
+                "coin": str(unsupported_task.get("coin") or "").strip().upper(),
+                "reason": "coin_not_supported",
+            }
+
         updated_result = dict(llm_result)
-        updated_result["tasks"] = enriched_tasks
+        updated_result["tasks"] = validated_tasks
         if len(enriched_tasks) == 1:
-            updated_result["intent"] = str(enriched_tasks[0].get("intent") or "unknown").strip().lower()
-            updated_result["coin"] = str(enriched_tasks[0].get("coin") or extracted_ticker).strip().upper()
+            updated_result["intent"] = str(validated_tasks[0].get("intent") or "unknown").strip().lower()
+            updated_result["coin"] = str(validated_tasks[0].get("coin") or extracted_ticker).strip().upper()
+            if updated_result["intent"] == "unsupported_coin":
+                updated_result["reason"] = "coin_not_supported"
         return updated_result
+
+    validated_result = validate_coin_task(
+        {
+            **dict(llm_result),
+            "coin": extracted_ticker,
+        }
+    )
+    if str(validated_result.get("intent") or "").strip().lower() == "unsupported_coin":
+        return {
+            "intent": "unsupported_coin",
+            "coin": str(validated_result.get("coin") or "").strip().upper(),
+            "reason": "coin_not_supported",
+        }
 
     updated_result = dict(llm_result)
     updated_result["coin"] = extracted_ticker
     return updated_result
 
 
-def _extract_rule_based_intent(
+def _build_generic_coin_result(
+    message: str,
     normalized: str,
     tokens: list[str],
-    resolved_coin: str,
+) -> dict[str, object] | None:
+    candidate = _extract_generic_coin_candidate(message)
+    if not candidate:
+        return None
+
+    intent_signal = resolve_intent(message)
+    base_intent = str(intent_signal.get("intent") or "unknown").strip().lower()
+    if base_intent == "help":
+        return _build_result("help", confidence=0.9)
+    if base_intent not in {"market_analysis", "set_favorite_coin", "price_query"}:
+        base_intent = "price_query"
+
+    validated = validate_coin_task(
+        {
+            "intent": base_intent,
+            "coin": candidate,
+            "confidence": 0.9,
+        }
+    )
+    if str(validated.get("intent") or "").strip().lower() == "unsupported_coin":
+        return {
+            "intent": "unsupported_coin",
+            "coin": str(validated.get("coin") or "").strip().upper(),
+            "reason": "coin_not_supported",
+        }
+
+    if base_intent == "market_analysis":
+        return _build_result("market_analysis", coin=candidate, confidence=0.9)
+
+    if base_intent == "set_favorite_coin":
+        return _build_result("set_favorite_coin", coin=candidate, confidence=0.9)
+
+    return _build_result("price_query", coin=candidate, confidence=0.9)
+
+
+def _build_rule_based_result_from_signals(
+    raw_text: str,
+    intent_signal: dict[str, object],
+    coin_signal: dict[str, object],
     previous_intent: str,
 ) -> dict[str, object] | None:
-    if normalized in HELP_MESSAGES or "help" in tokens:
+    intent = str(intent_signal.get("intent") or "unknown").strip().lower()
+    matched_intents = [
+        str(item or "").strip().lower()
+        for item in (intent_signal.get("matched_intents") or [])
+        if str(item or "").strip()
+    ]
+    coin = str(coin_signal.get("coin") or "").strip().upper()
+
+    if intent == "help":
         return _build_result("help", confidence=0.9)
 
-    if any(hint in normalized for hint in FAVORITE_HINTS):
-        return _build_result("get_favorite_coin", confidence=0.9)
-
-    if _is_context_message(normalized):
-        if resolved_coin and _should_infer_from_state(previous_intent):
-            return _build_result(previous_intent, coin=resolved_coin, confidence=0.8)
-        if resolved_coin:
+    if coin and _is_context_message(raw_text):
+        if _should_infer_from_state(previous_intent):
+            return _build_result(previous_intent, coin=coin, confidence=0.8)
+        if coin:
             return _build_result("unknown")
         return None
 
-    if any(hint in normalized for hint in SET_HINTS):
-        if resolved_coin:
-            return _build_result("set_favorite_coin", coin=resolved_coin, confidence=0.9)
-        return None
+    task_intents = [item for item in matched_intents if item in {"price_query", "market_analysis", "set_favorite_coin"}]
+    if len(task_intents) > 1 and coin:
+        tasks = []
+        for task_intent in task_intents:
+            validated = validate_coin_task(
+                {
+                    "intent": task_intent,
+                    "coin": coin,
+                    "confidence": 0.9,
+                }
+            )
+            if str(validated.get("intent") or "").strip().lower() == "unsupported_coin":
+                return {
+                    "intent": "unsupported_coin",
+                    "coin": coin,
+                    "reason": "coin_not_supported",
+                }
+            tasks.append(
+                {
+                    "intent": task_intent,
+                    "coin": coin,
+                }
+            )
+        return {
+            "tasks": tasks,
+            "intent": tasks[0]["intent"],
+            "coin": coin,
+            "confidence": 0.9,
+            "reason": "multi_intent_signals",
+        }
 
-    if any(hint in normalized for hint in ANALYSIS_HINTS):
-        if resolved_coin and not any(hint in normalized for hint in AMBIGUOUS_HINTS):
-            return _build_result("market_analysis", coin=resolved_coin, confidence=0.9)
-        if resolved_coin:
-            return None
-        return None
+    if coin and intent in {"price_query", "market_analysis", "set_favorite_coin"}:
+        validated = validate_coin_task(
+            {
+                "intent": intent,
+                "coin": coin,
+                "confidence": 0.9,
+            }
+        )
+        if str(validated.get("intent") or "").strip().lower() == "unsupported_coin":
+            return {
+                "intent": "unsupported_coin",
+                "coin": coin,
+                "reason": "coin_not_supported",
+            }
+        return _build_result(intent, coin=coin, confidence=0.9)
 
-    if any(hint in normalized for hint in PRICE_HINTS):
-        if resolved_coin:
-            return _build_result("price_query", coin=resolved_coin, confidence=0.9)
-        return None
-
-    if resolved_coin and not any(hint in normalized for hint in AMBIGUOUS_HINTS):
-        return _build_result("price_query", coin=resolved_coin, confidence=0.9)
+    if coin and intent == "unknown":
+        validated = validate_coin_task(
+            {
+                "intent": "price_query",
+                "coin": coin,
+                "confidence": 0.9,
+            }
+        )
+        if str(validated.get("intent") or "").strip().lower() == "unsupported_coin":
+            return {
+                "intent": "unsupported_coin",
+                "coin": coin,
+                "reason": "coin_not_supported",
+            }
+        return _build_result("price_query", coin=coin, confidence=0.9)
 
     return None
 
 
 def _accept_llm_result(result: dict[str, object]) -> dict[str, object]:
-    intent = str(result.get("intent") or "unknown").strip().lower()
-    coin = str(result.get("coin") or "").strip().upper()
-    confidence = float(result.get("confidence") or 0.0)
+    validated = validate_coin_task(result)
+    intent = str(validated.get("intent") or "unknown").strip().lower()
+    coin = str(validated.get("coin") or "").strip().upper()
+    confidence = float(validated.get("confidence") or 0.0)
 
     if intent not in ALLOWED_LLM_INTENTS:
-        return _build_result("unknown")
-
-    if coin and coin not in SUPPORTED_COINS:
+        if intent == "unsupported_coin":
+            return {
+                "intent": "unsupported_coin",
+                "coin": coin,
+                "confidence": confidence,
+                "reason": "coin_not_supported",
+            }
         return _build_result("unknown")
 
     if confidence < 0.75:
@@ -399,17 +621,6 @@ def _build_clarification_result(
     return None
 
 
-def _build_unsupported_coin_result(message: str) -> dict[str, object] | None:
-    unsupported = detect_unsupported_coin(message)
-    coin = str(unsupported.get("coin") or "").strip().upper()
-    if not coin:
-        return None
-
-    print(f"[UnsupportedCoin] unsupported coin detected coin={coin}")
-    print("[DecisionEngine] route -> unsupported_coin")
-    return build_unsupported_coin_payload(coin, reason="coin_not_supported")
-
-
 def decide_user_intent(message: str, user_state: dict | None = None):
     """Classify a user message into a simple intent dictionary."""
 
@@ -417,28 +628,39 @@ def decide_user_intent(message: str, user_state: dict | None = None):
     if not raw_text:
         return _build_result("unknown")
 
-    coin_resolution = semantic_resolver.resolve_coin_symbol(raw_text)
-    resolved_coin = str(coin_resolution.get("coin") or "").strip().upper()
-    resolution_method = str(coin_resolution.get("method") or "").strip().lower()
-    resolution_candidates = coin_resolution.get("candidates")
-    normalized = _normalize_text(raw_text)
-    tokens = _tokenize(normalized)
+    intent_signal = resolve_intent(raw_text)
+    coin_signal = resolve_coin(raw_text)
+    resolved_coin = str(coin_signal.get("coin") or "").strip().upper()
     previous_intent = str((user_state or {}).get("last_intent") or "").strip().lower()
+    resolution_method = str(coin_signal.get("method") or "").strip().lower()
+    resolution_candidates = coin_signal.get("candidates")
 
-    if is_fast_path_command(raw_text):
-        print("[DecisionEngine] fast-path command")
-        rule_based = _extract_rule_based_intent(normalized, tokens, resolved_coin, previous_intent)
-        if rule_based is not None:
-            return rule_based
-        print("[DecisionEngine] LLM failed, fallback to rule-based")
-    else:
-        if is_natural_language(raw_text):
+    direct_result = _build_rule_based_result_from_signals(raw_text, intent_signal, coin_signal, previous_intent)
+    llm_first = _should_attempt_llm_first(raw_text, intent_signal, coin_signal)
+
+    if not llm_first and direct_result is not None:
+        return direct_result
+
+    if llm_first:
+        if not _is_ascii_text(raw_text):
             print("[DecisionEngine] natural-language detected")
+        print("[DecisionEngine] LLM-first path")
         print("[DecisionEngine] routing to LLM-first path")
         llm_result = classify_with_llm(raw_text)
+        llm_reason = str(llm_result.get("reason") or "").strip().lower()
+        if llm_reason in {"missing_client", "llm_error", "invalid_json"}:
+            print("[DecisionEngine] LLM failed, resolver fallback")
+            print("[DecisionEngine] LLM unavailable or failed, fallback to ticker extraction")
         llm_result = _apply_generic_ticker_extraction(raw_text, llm_result)
+        llm_result = _validate_task_list_result(llm_result)
         if str(llm_result.get("intent") or "").strip().lower() == "unsupported_coin":
             return llm_result
+
+        if llm_reason in {"low_confidence", "candidate_mismatch"} or str(llm_result.get("intent") or "").strip().lower() == "clarification_needed":
+            clarification_result = _build_clarification_result(raw_text, candidates=resolution_candidates)
+            if clarification_result is not None:
+                return clarification_result
+
         llm_tasks = llm_result.get("tasks")
         if isinstance(llm_tasks, list) and llm_tasks:
             if len(llm_tasks) >= 2:
@@ -446,11 +668,13 @@ def decide_user_intent(message: str, user_state: dict | None = None):
             return llm_result
 
         accepted_llm_result = _accept_llm_result(llm_result)
+        if str(accepted_llm_result.get("intent") or "").strip().lower() == "unsupported_coin":
+            return _build_unsupported_coin_result(llm_result)
         if accepted_llm_result.get("intent") != "unknown" or accepted_llm_result.get("coin"):
             return accepted_llm_result
 
         print("[DecisionEngine] LLM failed, fallback to rule-based")
-        rule_based = _extract_rule_based_intent(normalized, tokens, resolved_coin, previous_intent)
+        rule_based = _build_rule_based_result_from_signals(raw_text, intent_signal, coin_signal, previous_intent)
         if rule_based is not None:
             return rule_based
 
@@ -459,12 +683,12 @@ def decide_user_intent(message: str, user_state: dict | None = None):
         if fuzzy_result is not None:
             return fuzzy_result
 
-    unsupported_coin_result = _build_unsupported_coin_result(raw_text)
-    if unsupported_coin_result is not None:
-        return unsupported_coin_result
+    if direct_result is not None:
+        return direct_result
 
-    clarification_result = _build_clarification_result(raw_text)
-    if clarification_result is not None:
-        return clarification_result
+    if llm_first:
+        clarification_result = _build_clarification_result(raw_text)
+        if clarification_result is not None:
+            return clarification_result
 
     return _build_result("unknown")

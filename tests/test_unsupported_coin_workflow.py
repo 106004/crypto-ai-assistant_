@@ -74,7 +74,7 @@ class UnsupportedCoinWorkflowTest(unittest.TestCase):
         ) as classify_with_llm:
             result = decide_user_intent("analyze pepe")
 
-        classify_with_llm.assert_not_called()
+        classify_with_llm.assert_called_once_with("analyze pepe")
         self.assertEqual(
             result,
             {
@@ -125,7 +125,7 @@ class UnsupportedCoinWorkflowTest(unittest.TestCase):
         self.assertEqual(result, "unsupported-message")
         self.assertTrue(
             any(
-                "[Agent] unsupported_coin routed to Agent workflow" in str(call.args[0])
+                "[CommandRouter] handoff to decision_engine" in str(call.args[0])
                 for call in print_log.call_args_list
             )
         )
@@ -212,10 +212,37 @@ class UnsupportedCoinWorkflowTest(unittest.TestCase):
             self.assertEqual(result, "unsupported-message")
             self.assertTrue(
                 any(
-                    "[Agent] unsupported_coin routed to Agent workflow" in str(call.args[0])
+                    "[CommandRouter] handoff to decision_engine" in str(call.args[0])
                     for call in print_log.call_args_list
                 )
             )
+
+    def test_analyze_unsupported_coin_short_circuits_before_analysis_service(self):
+        with patch(
+            "services.line.command_router.onboarding_service.get_onboarding_reply",
+            return_value=None,
+        ), patch(
+            "services.line.command_router.handle_coin_analysis"
+        ) as handle_coin_analysis, patch(
+            "services.line.command_router.run_agent_workflow",
+            return_value={
+                "intent": "unsupported_coin",
+                "coin": "LTC",
+                "reason": "coin_not_supported",
+                "message": "unsupported-message",
+            },
+        ) as run_agent_workflow, patch("builtins.print") as print_log:
+            result = route_user_message("unsupported-user", "analyze ltc")
+
+        handle_coin_analysis.assert_not_called()
+        run_agent_workflow.assert_called_once_with("unsupported-user", "analyze ltc")
+        self.assertEqual(result, "unsupported-message")
+        self.assertTrue(
+            any(
+                "[CommandRouter] handoff to decision_engine" in str(call.args[0])
+                for call in print_log.call_args_list
+            )
+        )
 
 
 if __name__ == "__main__":

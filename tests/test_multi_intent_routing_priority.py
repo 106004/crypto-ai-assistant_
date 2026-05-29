@@ -43,6 +43,30 @@ class MultiIntentRoutingPriorityTest(unittest.TestCase):
         execute_mock.assert_called_once()
         self.assertEqual(response, "combined")
 
+    def test_natural_language_hands_off_to_decision_engine(self):
+        with patch(
+            "services.line.command_router.run_agent_workflow",
+            return_value={
+                "intent": "multi_task",
+                "tasks": [
+                    {"intent": "market_analysis", "coin": "BTC"},
+                    {"intent": "price_query", "coin": "BTC"},
+                ],
+                "results": [],
+                "result": "combined",
+            },
+        ) as workflow_mock, patch("builtins.print") as print_log:
+            response = self._route("請分析 BTC 並告訴我價格")
+
+        workflow_mock.assert_called_once_with("routing-user", "請分析 btc 並告訴我價格")
+        self.assertEqual(response, "combined")
+        self.assertTrue(
+            any(
+                "[CommandRouter] handoff to decision_engine" in str(call.args[0])
+                for call in print_log.call_args_list
+            )
+        )
+
     def test_multi_intent_sentence_with_reverse_order_routes_to_execute_tasks(self):
         with patch(
             "services.agent.decision_engine.classify_with_llm",

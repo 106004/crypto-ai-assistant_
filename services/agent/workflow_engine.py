@@ -68,7 +68,7 @@ def _run_task(task: dict[str, object]) -> dict[str, object]:
     coin = normalized_task["coin"]
 
     if intent in {"price_query", "market_analysis"} and coin and not is_supported_coin(coin.lower()):
-        print("[WorkflowEngine] unsupported coin task short-circuited")
+        print("[WorkflowEngine] unsupported_coin short-circuit")
         return {"ok": True, "result": build_unsupported_coin_message(coin)}
 
     if intent == "price_query":
@@ -78,6 +78,7 @@ def _run_task(task: dict[str, object]) -> dict[str, object]:
         return {"ok": True, "result": handle_analysis_query(coin)}
 
     if intent == "unsupported_coin":
+        print("[WorkflowEngine] unsupported_coin short-circuit")
         return {"ok": True, "result": build_unsupported_coin_message(coin)}
 
     if intent == "clarification_needed":

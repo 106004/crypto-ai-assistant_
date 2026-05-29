@@ -8,6 +8,8 @@ from typing import Any
 
 from config.settings import GEMINI_MODEL
 from gemini_client import get_gemini_client
+from services.agent.coin_validator import validate_coin_task
+from services.agent.coin_validator import SUPPORTED_COINS
 
 
 ALLOWED_INTENTS = {
@@ -24,18 +26,6 @@ ALLOWED_TASK_INTENTS = {
     "unsupported_coin",
     "clarification_needed",
     "unknown",
-}
-SUPPORTED_COINS = {
-    "BTC",
-    "ETH",
-    "SOL",
-    "BNB",
-    "XRP",
-    "DOGE",
-    "ADA",
-    "TON",
-    "TRX",
-    "AVAX",
 }
 NULL_COIN_ALLOWED_INTENTS = {"help", "get_favorite_coin", "unknown"}
 CONFIDENCE_THRESHOLD = 0.75
@@ -117,19 +107,6 @@ def _normalize_tasks_payload(payload_tasks: Any) -> list[dict[str, object]] | No
     if not isinstance(payload_tasks, list) or not payload_tasks:
         return None
 
-    for raw_task in payload_tasks:
-        if not isinstance(raw_task, dict):
-            continue
-
-        intent = _normalize_task_intent(raw_task.get("intent"))
-        if intent != "unsupported_coin":
-            continue
-
-        coin = _normalize_task_coin(raw_task.get("coin"))
-        if coin is None or coin in SUPPORTED_COINS:
-            return None
-        return [{"intent": "unsupported_coin", "coin": coin}]
-
     normalized_tasks: list[dict[str, object]] = []
     for raw_task in payload_tasks:
         if not isinstance(raw_task, dict):
@@ -155,10 +132,41 @@ def _normalize_tasks_payload(payload_tasks: Any) -> list[dict[str, object]] | No
 
         normalized_tasks.append({"intent": intent, "coin": coin})
 
-    if normalized_tasks and normalized_tasks[0]["intent"] in {"clarification_needed", "unknown"}:
-        return [normalized_tasks[0]]
+    validated_tasks = [validate_coin_task(task) for task in normalized_tasks]
 
-    return normalized_tasks
+    unsupported_tasks = [
+        task
+        for task in validated_tasks
+        if str(task.get("intent") or "").strip().lower() == "unsupported_coin"
+    ]
+    unsupported_coins = {
+        str(task.get("coin") or "").strip().upper()
+        for task in unsupported_tasks
+        if str(task.get("coin") or "").strip()
+    }
+    if len(unsupported_tasks) == len(validated_tasks) and len(unsupported_coins) == 1:
+        return [
+            {
+                "intent": "unsupported_coin",
+                "coin": next(iter(unsupported_coins)),
+            }
+        ]
+
+    if validated_tasks and str(validated_tasks[0].get("intent") or "").strip().lower() in {"clarification_needed", "unknown"}:
+        return [
+            {
+                "intent": str(validated_tasks[0].get("intent") or "unknown").strip().lower(),
+                "coin": validated_tasks[0].get("coin"),
+            }
+        ]
+
+    return [
+        {
+            "intent": str(task.get("intent") or "unknown").strip().lower(),
+            "coin": task.get("coin"),
+        }
+        for task in validated_tasks
+    ]
 
 
 def _build_tasks_response(tasks: list[dict[str, object]]) -> dict[str, object]:
@@ -173,6 +181,17 @@ def _build_tasks_response(tasks: list[dict[str, object]]) -> dict[str, object]:
         "confidence": _compatibility_confidence(primary_intent),
         "reason": reason,
     }
+
+
+def _validate_classifier_result(result: dict[str, object]) -> dict[str, object]:
+    validated = validate_coin_task(result)
+    intent = str(validated.get("intent") or "").strip().lower()
+    if intent == "unsupported_coin":
+        return {
+            **validated,
+            "reason": "coin_not_supported",
+        }
+    return validated
 
 
 def _normalize_confidence(raw_confidence: Any) -> tuple[float | None, str | None]:
@@ -254,7 +273,7 @@ def parse_llm_classifier_output(
     payload_tasks = _normalize_tasks_payload(payload.get("tasks"))
     if payload_tasks is not None:
         print(f"[LLMClassifier] parsed tasks:\n{payload_tasks}")
-        return _build_tasks_response(payload_tasks)
+        return _validate_classifier_result(_build_tasks_response(payload_tasks))
 
     raw_intent = payload.get("intent")
     raw_coin = payload.get("coin")
@@ -286,7 +305,7 @@ def parse_llm_classifier_output(
         return _build_unknown("coin_unrecognized")
 
     if coin not in SUPPORTED_COINS:
-        return _build_response("unsupported_coin", coin, confidence, "coin_not_supported")
+        return _validate_classifier_result(_build_response("unsupported_coin", coin, confidence, "coin_not_supported"))
 
     candidate_coins = {
         str(item.get("coin") or "").strip().upper()
@@ -325,7 +344,7 @@ def classify_with_llm(
 
     client = get_gemini_client()
     if client is None:
-        print("[LLMClassifier] invalid JSON")
+        print("[LLMClassifier] unavailable or failed")
         return _build_unknown("missing_client")
 
     try:
@@ -335,7 +354,7 @@ def classify_with_llm(
         )
         raw_output = str(getattr(response, "text", "") or "").strip()
     except Exception:
-        print("[LLMClassifier] invalid JSON")
+        print("[LLMClassifier] unavailable or failed")
         return _build_unknown("llm_error")
 
     result = parse_llm_classifier_output(raw_output, message=message, candidates=candidates)
@@ -343,7 +362,7 @@ def classify_with_llm(
     intent = str(result.get("intent") or "").strip().lower()
 
     if reason == "invalid_json":
-        print("[LLMClassifier] invalid JSON")
+        print("[LLMClassifier] unavailable or failed")
         return result
 
     print(f"[LLMClassifier] final classifier output:\n{result}")
@@ -352,7 +371,7 @@ def classify_with_llm(
     print("[LLMClassifier] JSON parsed")
 
     if intent == "unsupported_coin" or reason == "coin_not_supported":
-        print("[LLMJudge] unsupported coin detected")
+        print("[LLMClassifier] unsupported coin detected")
         return result
 
     if reason == "unsupported_intent":

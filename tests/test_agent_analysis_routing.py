@@ -74,21 +74,32 @@ class AgentAnalysisRoutingTest(unittest.TestCase):
             )
         )
 
-    def test_non_agent_analysis_cases_remain_legacy(self):
+    def test_non_agent_analysis_cases_handoff_to_decision_engine(self):
         with patch(
             "services.line.command_router.onboarding_service.get_onboarding_reply",
             return_value=None,
         ), patch(
-            "services.line.command_router.run_agent_workflow"
+            "services.line.command_router.run_agent_workflow",
+            return_value={
+                "intent": "unsupported_coin",
+                "coin": "USDT",
+                "reason": "coin_not_supported",
+                "message": "UNSUPPORTED_MESSAGE",
+            },
         ) as run_agent_workflow, patch(
-            "services.line.command_router.handle_coin_analysis",
-            return_value="LEGACY_ANALYSIS_MESSAGE",
-        ) as handle_coin_analysis:
+            "services.line.command_router.handle_coin_analysis"
+        ) as handle_coin_analysis, patch("builtins.print") as print_log:
             result = route_user_message("user-1", "analyze usdt")
 
-        self.assertEqual(result, "LEGACY_ANALYSIS_MESSAGE")
-        handle_coin_analysis.assert_called_once_with("usdt")
-        run_agent_workflow.assert_not_called()
+        self.assertEqual(result, "UNSUPPORTED_MESSAGE")
+        handle_coin_analysis.assert_not_called()
+        run_agent_workflow.assert_called_once_with("user-1", "analyze usdt")
+        self.assertTrue(
+            any(
+                "[CommandRouter] handoff to decision_engine" in str(call.args[0])
+                for call in print_log.call_args_list
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from services.agent import semantic_resolver
 from services.agent.workflow_engine import run_agent_workflow
-from services.agent.unsupported_coin_service import detect_unsupported_coin
 from services.line import onboarding_service
 from services.line.line_facade_service import handle_coin_analysis, handle_coin_price
 from services.line.message_service import (
@@ -15,15 +13,9 @@ from services.line.message_service import (
 from services.market.coin_catalog import get_coin_info, is_supported_coin
 
 
-HELP_COMMANDS = {"help", "/help", "說明", "使用說明"}
+HELP_COMMANDS = {"help", "/help", "說明", "使用說明", "幫助"}
 AGENT_PRICE_COMMANDS = {"btc", "eth", "sol", "bnb", "xrp", "doge", "ada", "ton", "trx", "avax"}
 AGENT_ONBOARDING_COMMANDS = AGENT_PRICE_COMMANDS
-AGENT_FALLBACK_HINTS = {
-    "mycoin",
-    "favorite",
-    "最愛",
-    "最爱",
-}
 
 
 def _route_agent_reply(user_id, normalized_message, branch_label):
@@ -70,18 +62,9 @@ def _route_semantic_agent_fallback(user_id, normalized_message):
     return format_unknown_command_message()
 
 
-def _should_route_to_agent(normalized_message: str) -> bool:
-    if not normalized_message:
-        return False
-
-    coin_resolution = semantic_resolver.resolve_coin_symbol(normalized_message)
-    if str(coin_resolution.get("method") or "").strip().lower() in {"exact_alias", "fuzzy"}:
-        return True
-
-    if any(hint in normalized_message for hint in AGENT_FALLBACK_HINTS):
-        return True
-
-    return False
+def _handoff_to_decision_engine(user_id, normalized_message):
+    print("[CommandRouter] handoff to decision_engine")
+    return _route_semantic_agent_fallback(user_id, normalized_message)
 
 
 def route_user_message(user_id, user_message, event_type=None):
@@ -99,6 +82,7 @@ def route_user_message(user_id, user_message, event_type=None):
     parts = normalized_message.split()
 
     if len(parts) == 1 and parts[0] in AGENT_PRICE_COMMANDS:
+        print("[CommandRouter] legacy fast path")
         agent_reply = _route_agent_reply(
             user_id,
             normalized_message,
@@ -111,56 +95,43 @@ def route_user_message(user_id, user_message, event_type=None):
         print("[Agent] fallback error: agent workflow returned no result")
         return handle_coin_price(parts[0])
 
-    if len(parts) == 2 and parts[0] == "analyze" and get_coin_info(parts[1]) is not None:
-        if parts[1] in AGENT_PRICE_COMMANDS:
-            agent_reply = _route_agent_reply(
-                user_id,
-                normalized_message,
-                "[Agent] market_analysis routed to Agent workflow",
-            )
-            if agent_reply is not None:
-                print("[Agent] analysis workflow success")
-                return agent_reply
-            print("[Agent] fallback to legacy analysis flow")
-            print("[Agent] fallback error: agent workflow returned no result")
-            return handle_coin_analysis(parts[1])
-
-        print("[CommandRouter] route -> analysis_service")
-        return handle_coin_analysis(parts[1])
-
     if len(parts) == 2 and parts[0] == "analyze":
-        print("[CommandRouter] route -> analysis_service")
+        coin_info = get_coin_info(parts[1])
+        if coin_info is None:
+            return _handoff_to_decision_engine(user_id, normalized_message)
+
+        print("[CommandRouter] legacy fast path")
+        agent_reply = _route_agent_reply(
+            user_id,
+            normalized_message,
+            "[Agent] market_analysis routed to Agent workflow",
+        )
+        if agent_reply is not None:
+            print("[Agent] analysis workflow success")
+            return agent_reply
+        print("[Agent] fallback to legacy analysis flow")
+        print("[Agent] fallback error: agent workflow returned no result")
         return handle_coin_analysis(parts[1])
 
     if len(parts) == 2 and parts[0] == "set":
         if not is_supported_coin(parts[1]):
-            if detect_unsupported_coin(normalized_message).get("coin"):
-                agent_reply = _route_agent_reply(
-                    user_id,
-                    normalized_message,
-                    "[Agent] unsupported_coin routed to Agent workflow",
-                )
-                if agent_reply is not None:
-                    return agent_reply
-            return _route_semantic_agent_fallback(user_id, normalized_message)
+            return _handoff_to_decision_engine(user_id, normalized_message)
 
-        if parts[1] in AGENT_ONBOARDING_COMMANDS:
-            agent_reply = _route_agent_reply(
-                user_id,
-                normalized_message,
-                "[Agent] set_favorite_coin routed to Agent workflow",
-            )
-            if agent_reply is not None:
-                print("[Agent] onboarding workflow success")
-                return agent_reply
-            print("[Agent] fallback to legacy onboarding flow")
-            print("[Agent] fallback error: agent workflow returned no result")
-            return onboarding_service.handle_set_coin(user_id, parts[1])
-
-        print("[CommandRouter] route -> onboarding set coin")
+        print("[CommandRouter] legacy fast path")
+        agent_reply = _route_agent_reply(
+            user_id,
+            normalized_message,
+            "[Agent] set_favorite_coin routed to Agent workflow",
+        )
+        if agent_reply is not None:
+            print("[Agent] onboarding workflow success")
+            return agent_reply
+        print("[Agent] fallback to legacy onboarding flow")
+        print("[Agent] fallback error: agent workflow returned no result")
         return onboarding_service.handle_set_coin(user_id, parts[1])
 
     if len(parts) == 1 and parts[0] == "mycoin":
+        print("[CommandRouter] legacy fast path")
         agent_reply = _route_agent_reply(
             user_id,
             normalized_message,
@@ -174,6 +145,7 @@ def route_user_message(user_id, user_message, event_type=None):
         return onboarding_service.handle_mycoin(user_id)
 
     if len(parts) == 1 and parts[0] in HELP_COMMANDS:
+        print("[CommandRouter] legacy fast path")
         agent_reply = _route_agent_reply(
             user_id,
             normalized_message,
@@ -186,22 +158,4 @@ def route_user_message(user_id, user_message, event_type=None):
         print("[Agent] fallback error: agent workflow returned no result")
         return format_supported_coin_message()
 
-    if detect_unsupported_coin(normalized_message).get("coin"):
-        agent_reply = _route_agent_reply(
-            user_id,
-            normalized_message,
-            "[Agent] unsupported_coin routed to Agent workflow",
-        )
-        if agent_reply is not None:
-            return agent_reply
-
-    if _should_route_to_agent(normalized_message):
-        agent_reply = _route_agent_reply(
-            user_id,
-            normalized_message,
-            "[Agent] semantic fallback routed to Agent workflow",
-        )
-        if agent_reply is not None:
-            return agent_reply
-
-    return _route_semantic_agent_fallback(user_id, normalized_message)
+    return _handoff_to_decision_engine(user_id, normalized_message)

@@ -1,4 +1,4 @@
-"""Unsupported coin helpers for the agent layer."""
+"""Unsupported coin nickname helpers for the agent layer."""
 
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ def _score_fuzzy(candidate: str, alias: str) -> float:
 
 
 def detect_unsupported_coin(message: str) -> dict[str, object]:
-    """Return an unsupported coin match if the message clearly refers to one."""
+    """Normalize known unsupported coin nicknames to symbols."""
 
     raw = str(message or "").strip()
     if not raw:

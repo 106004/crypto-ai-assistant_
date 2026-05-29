@@ -84,7 +84,40 @@ class MultiTaskWorkflowTest(unittest.TestCase):
         self.assertIn("unsupported coin message", result["result"])
         self.assertTrue(
             any(
-                "[WorkflowEngine] unsupported coin task short-circuited" in str(call.args[0])
+                "[WorkflowEngine] unsupported_coin short-circuit" in str(call.args[0])
+                for call in print_log.call_args_list
+            )
+        )
+
+    def test_supported_task_and_unsupported_task_both_return_messages(self):
+        with patch(
+            "services.agent.workflow_engine.decision_engine.decide_user_intent",
+            return_value={
+                "tasks": [
+                    {"intent": "market_analysis", "coin": "BTC"},
+                    {"intent": "unsupported_coin", "coin": "ZEC"},
+                ]
+            },
+        ), patch(
+            "services.agent.workflow_engine.handle_analysis_query",
+            return_value="BTC analysis result",
+        ) as analysis_mock, patch(
+            "services.agent.workflow_engine.handle_price_query",
+            return_value="ZEC price result",
+        ) as price_mock, patch(
+            "services.agent.workflow_engine.build_unsupported_coin_message",
+            return_value="ZEC unsupported message",
+        ) as unsupported_mock, patch("builtins.print") as print_log:
+            result = run_agent_workflow("multi-task-user", "請分析 BTC 並給我 ZEC 價格")
+
+        analysis_mock.assert_called_once_with("BTC")
+        price_mock.assert_not_called()
+        unsupported_mock.assert_called_once_with("ZEC")
+        self.assertIn("BTC analysis result", result["result"])
+        self.assertIn("ZEC unsupported message", result["result"])
+        self.assertTrue(
+            any(
+                "[WorkflowEngine] unsupported_coin short-circuit" in str(call.args[0])
                 for call in print_log.call_args_list
             )
         )
