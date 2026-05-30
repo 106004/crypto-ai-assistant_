@@ -16,6 +16,24 @@ class CoinResolverFlowTest(unittest.TestCase):
         self.assertTrue(any(step["step"] == "exact_match" and step["matched"] for step in result["debug_trace"]))
         self.assertFalse(any(step["step"] == "gemini_candidate_judge" and step["executed"] for step in result["debug_trace"]))
 
+    def test_bitcoin_chinese_alias_still_short_circuits(self):
+        result = resolve_coin_flow("我想查比特幣", debug=True)
+
+        self.assertEqual(result["coin"], "BTC")
+        self.assertEqual(result["status"], "supported")
+        self.assertEqual(result["method"], "exact_match")
+        self.assertFalse(result["llm_used"])
+        self.assertTrue(any(step["step"] == "exact_match" and step["matched"] for step in result["debug_trace"]))
+
+    def test_ethereum_chinese_alias_still_short_circuits(self):
+        result = resolve_coin_flow("我想查以太幣", debug=True)
+
+        self.assertEqual(result["coin"], "ETH")
+        self.assertEqual(result["status"], "supported")
+        self.assertEqual(result["method"], "exact_match")
+        self.assertFalse(result["llm_used"])
+        self.assertTrue(any(step["step"] == "exact_match" and step["matched"] for step in result["debug_trace"]))
+
     def test_link_uses_ticker_candidate_and_gemini_cannot_override(self):
         with patch(
             "services.agent.coin_resolver_flow.classify_with_llm",
@@ -130,16 +148,16 @@ class CoinResolverFlowTest(unittest.TestCase):
             "services.agent.coin_resolver_flow.classify_with_llm",
             return_value={
                 "intent": "price_query",
-                "coin": "BTC",
+                "coin": "比持幣",
                 "confidence": 0.87,
-                "reason": "selected from candidates",
+                "reason": "raw text",
             },
         ):
             result = resolve_coin_flow("我想查比持幣", debug=True)
 
         self.assertNotEqual(result["coin"], "比持幣")
-        self.assertIn(result["coin"], {None, "BTC"})
-        self.assertIn(result["status"], {"supported", "ambiguous", "not_found"})
+        self.assertIsNone(result["coin"])
+        self.assertEqual(result["status"], "ambiguous")
         self.assertTrue(any(step["step"] == "gemini_candidate_judge" and step["executed"] for step in result["debug_trace"]))
         self.assertTrue(
             any(
@@ -151,7 +169,15 @@ class CoinResolverFlowTest(unittest.TestCase):
         self.assertTrue(
             any(
                 step["step"] == "gemini_candidate_judge"
-                and step.get("rejected_reason") in {None, "non_symbol_raw_text"}
+                and step.get("rejected_reason") == "non_symbol_raw_text"
+                and step.get("normalized_coin") is None
+                for step in result["debug_trace"]
+            )
+        )
+        self.assertTrue(
+            any(
+                step["step"] == "gemini_candidate_judge"
+                and step.get("final_coin_source") == "rejected"
                 for step in result["debug_trace"]
             )
         )
@@ -169,17 +195,24 @@ class CoinResolverFlowTest(unittest.TestCase):
         with patch(
             "services.agent.coin_resolver_flow.classify_with_llm",
             return_value={
-                "intent": "clarification_needed",
-                "coin": None,
-                "confidence": 0.0,
-                "reason": "non_symbol_raw_text",
+                "intent": "price_query",
+                "coin": "我想查一個完全不存在的幣",
+                "confidence": 0.91,
+                "reason": "raw text",
             },
         ):
             result = resolve_coin_flow("我想查一個完全不存在的幣", debug=True)
 
         self.assertIsNone(result["coin"])
-        self.assertIn(result["status"], {"not_found", "ambiguous"})
+        self.assertEqual(result["status"], "not_found")
         self.assertNotEqual(result["coin"], "我想查一個完全不存在的幣")
+        self.assertTrue(
+            any(
+                step["step"] == "gemini_candidate_judge"
+                and step.get("rejected_reason") == "non_symbol_raw_text"
+                for step in result["debug_trace"]
+            )
+        )
 
     def test_weather_message_still_runs_gemini_without_candidates(self):
         with patch(

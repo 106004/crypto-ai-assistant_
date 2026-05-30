@@ -236,6 +236,7 @@ class LLMIntentClassifierTest(unittest.TestCase):
         self.assertEqual(result["coin"], "BTC")
         self.assertIn("BTC", str(capture["contents"]))
         self.assertIn("btcc price", str(capture["contents"]))
+        self.assertIn("only output standard english ticker symbol or null", str(capture["contents"]).lower())
 
     def test_parse_llm_classifier_output_rejects_raw_chinese_coin(self):
         result = parse_llm_classifier_output(
@@ -266,6 +267,18 @@ class LLMIntentClassifierTest(unittest.TestCase):
         self.assertEqual(result["intent"], "clarification_needed")
         self.assertIsNone(result["coin"])
         self.assertEqual(result["llm_raw_coin"], "比持幣")
+        self.assertIsNone(result["normalized_coin"])
+        self.assertEqual(result["rejected_reason"], "non_symbol_raw_text")
+
+    def test_parse_llm_classifier_output_rejects_chinese_sentence_coin(self):
+        result = parse_llm_classifier_output(
+            '{"intent":"price_query","coin":"我想查比持幣","confidence":0.95,"reason":"raw text"}',
+            return_debug=True,
+        )
+
+        self.assertEqual(result["intent"], "clarification_needed")
+        self.assertIsNone(result["coin"])
+        self.assertEqual(result["llm_raw_coin"], "我想查比持幣")
         self.assertIsNone(result["normalized_coin"])
         self.assertEqual(result["rejected_reason"], "non_symbol_raw_text")
 

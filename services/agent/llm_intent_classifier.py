@@ -8,7 +8,7 @@ from typing import Any
 
 from config.settings import GEMINI_MODEL
 from gemini_client import get_gemini_client
-from services.agent.coin_validator import SUPPORTED_COINS, normalize_llm_coin, validate_coin_task
+from services.agent.coin_validator import SUPPORTED_COINS, normalize_coin_symbol, normalize_llm_coin, validate_coin_task
 
 
 ALLOWED_INTENTS = {
@@ -72,8 +72,7 @@ def _normalize_intent(raw_intent: Any) -> str:
 
 
 def _normalize_coin(raw_coin: Any) -> str | None:
-    normalized = normalize_llm_coin(raw_coin)
-    return str(normalized.get("normalized_coin") or "").strip().upper() or None
+    return normalize_coin_symbol(raw_coin)
 
 
 def _normalize_task_intent(raw_intent: Any) -> str:
@@ -228,6 +227,9 @@ def _build_prompt(message: str, candidates: list[dict[str, object]] | None = Non
         "Each task must contain intent and coin.\n"
         "Use one of these task intents: price_query, market_analysis, unsupported_coin, clarification_needed, unknown.\n"
         "If the coin is unknown, set coin to null.\n"
+        "Only output standard English ticker symbol or null.\n"
+        "Examples: BTC, ETH, DOGE, SOL, XRP, ADA, TRUMP, LINK.\n"
+        "Never output Chinese coin names, typos, full sentences, or explanations.\n"
         "Use the original message and the candidate coins if provided.\n"
         "Candidate coins are hints, not hard restrictions.\n"
         "You may select one of the candidates or choose another supported coin if the user's text clearly points to it.\n"
@@ -287,7 +289,7 @@ def parse_llm_classifier_output(
         return _build_unknown(confidence_error or "missing_confidence")
 
     coin_debug = normalize_llm_coin(raw_coin)
-    coin = str(coin_debug.get("normalized_coin") or "").strip().upper() or None
+    coin = normalize_coin_symbol(raw_coin)
     rejected_reason = str(coin_debug.get("rejected_reason") or "").strip() or None
     raw_coin_text = str(coin_debug.get("llm_raw_coin") or "").strip() or None
     if confidence < CONFIDENCE_THRESHOLD:

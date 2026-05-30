@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from services.agent.coin_aliases import is_supported_coin
 from services.agent.coin_resolver import GENERIC_TICKER_STOPWORDS
+from services.agent.coin_validator import normalize_llm_coin, normalize_coin_symbol
 from services.agent.llm_intent_classifier import classify_with_llm
 from services.agent.semantic_resolver import _match_exact_alias, _match_fuzzy_candidates
 from services.agent.unsupported_coin_service import detect_unsupported_coin
@@ -188,13 +189,15 @@ def _finalize_from_gemini_candidates(
     candidates: list[dict[str, Any]],
     debug_trace: list[dict[str, Any]],
 ) -> dict[str, object]:
-    coin = _normalize_coin_value(llm_result.get("coin"))
+    coin_debug = normalize_llm_coin(llm_result.get("coin"))
+    coin = normalize_coin_symbol(llm_result.get("coin"))
     confidence = float(llm_result.get("confidence") or 0.0)
     reason = str(llm_result.get("reason") or "").strip().lower()
     intent = str(llm_result.get("intent") or "").strip().lower()
-    llm_raw_coin = llm_result.get("llm_raw_coin")
-    normalized_coin = llm_result.get("normalized_coin")
-    rejected_reason = llm_result.get("rejected_reason")
+    llm_raw_coin = llm_result.get("llm_raw_coin") or coin_debug.get("llm_raw_coin")
+    normalized_coin = coin_debug.get("normalized_coin")
+    rejected_reason = llm_result.get("rejected_reason") or coin_debug.get("rejected_reason")
+    final_coin_source = "gemini_candidate_judge" if coin is not None else ("rejected" if llm_raw_coin else "none")
 
     llm_selected_candidate = _is_candidate_match(coin, candidates)
     accepted_coin = coin
@@ -207,6 +210,7 @@ def _finalize_from_gemini_candidates(
             "llm_raw_coin": llm_raw_coin,
             "normalized_coin": normalized_coin,
             "rejected_reason": rejected_reason,
+            "final_coin_source": final_coin_source,
             "reason": reason,
             "intent": intent,
             "selected_candidate": llm_selected_candidate,
@@ -225,6 +229,7 @@ def _finalize_from_gemini_candidates(
                 "source": "gemini_candidate_judge",
                 "coin": None,
                 "status": status,
+                "final_coin_source": final_coin_source,
             }
         )
         return _build_response(
@@ -246,6 +251,7 @@ def _finalize_from_gemini_candidates(
             "source": "gemini_candidate_judge",
             "coin": accepted_coin,
             "status": status,
+            "final_coin_source": final_coin_source,
         }
     )
     return _build_response(

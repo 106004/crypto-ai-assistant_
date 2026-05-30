@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import re
 
-from services.agent.coin_aliases import normalize_coin_alias
-from services.agent.unsupported_coin_service import detect_unsupported_coin
+from services.agent.coin_aliases import COIN_ALIASES
+from services.agent.unsupported_coin_service import UNSUPPORTED_COIN_ALIASES
 from services.market.coin_catalog import SUPPORTED_COINS as COIN_CATALOG
 
 
 SUPPORTED_COINS = {str(symbol).strip().upper() for symbol in COIN_CATALOG}
+_SUPPORTED_ALIAS_BY_LOWER = {str(alias).strip().lower(): str(symbol).strip().upper() for alias, symbol in COIN_ALIASES.items()}
+_UNSUPPORTED_ALIAS_BY_LOWER = {
+    str(alias).strip().lower(): str(symbol).strip().upper()
+    for alias, symbol in UNSUPPORTED_COIN_ALIASES.items()
+}
 VALID_COIN_INTENTS = {
     "price_query",
     "market_analysis",
@@ -18,10 +23,37 @@ VALID_COIN_INTENTS = {
 }
 
 
+def _normalize_lookup_key(raw_coin: object) -> str:
+    return re.sub(r"\s+", " ", str(raw_coin or "").strip()).lower()
+
+
+def normalize_coin_symbol(raw_coin) -> str | None:
+    """Normalize Gemini coin text into a canonical symbol when possible."""
+
+    raw_text = re.sub(r"\s+", " ", str(raw_coin or "").strip())
+    if not raw_text:
+        return None
+
+    upper_text = raw_text.upper()
+    if re.fullmatch(r"[A-Z]{2,5}", upper_text):
+        return upper_text
+
+    lookup_key = _normalize_lookup_key(raw_text)
+    supported_alias = _SUPPORTED_ALIAS_BY_LOWER.get(lookup_key)
+    if supported_alias:
+        return supported_alias
+
+    unsupported_alias = _UNSUPPORTED_ALIAS_BY_LOWER.get(lookup_key)
+    if unsupported_alias:
+        return unsupported_alias
+
+    return None
+
+
 def normalize_llm_coin(raw_coin) -> dict[str, object]:
     """Normalize Gemini coin text into a canonical symbol when possible."""
 
-    raw_text = str(raw_coin or "").strip()
+    raw_text = re.sub(r"\s+", " ", str(raw_coin or "").strip())
     if not raw_text:
         return {
             "llm_raw_coin": None,
@@ -29,27 +61,11 @@ def normalize_llm_coin(raw_coin) -> dict[str, object]:
             "rejected_reason": "missing_coin",
         }
 
-    supported_normalized = normalize_coin_alias(raw_text)
-    if supported_normalized in SUPPORTED_COINS:
+    normalized_coin = normalize_coin_symbol(raw_text)
+    if normalized_coin is not None:
         return {
             "llm_raw_coin": raw_text,
-            "normalized_coin": supported_normalized,
-            "rejected_reason": None,
-        }
-
-    unsupported = detect_unsupported_coin(raw_text)
-    unsupported_coin = str(unsupported.get("coin") or "").strip().upper() or None
-    if unsupported_coin:
-        return {
-            "llm_raw_coin": raw_text,
-            "normalized_coin": unsupported_coin,
-            "rejected_reason": None,
-        }
-
-    if re.fullmatch(r"[A-Z]{2,10}", raw_text):
-        return {
-            "llm_raw_coin": raw_text,
-            "normalized_coin": raw_text,
+            "normalized_coin": normalized_coin,
             "rejected_reason": None,
         }
 
