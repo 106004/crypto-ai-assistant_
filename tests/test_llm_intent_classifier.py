@@ -324,6 +324,27 @@ class LLMIntentClassifierTest(unittest.TestCase):
             },
         )
 
+    def test_classify_with_llm_returns_unsupported_coin_for_shib(self):
+        response_text = (
+            '{"intent":"price_query","coin":"SHIB","confidence":0.96,'
+            '"reason":"recognized but unsupported"}'
+        )
+        with patch(
+            "services.agent.llm_intent_classifier.get_gemini_client",
+            return_value=FakeClient(response_text),
+        ):
+            result = classify_with_llm("SHIB price")
+
+        self.assertEqual(
+            result,
+            {
+                "intent": "unsupported_coin",
+                "coin": "SHIB",
+                "confidence": 0.96,
+                "reason": "coin_not_supported",
+            },
+        )
+
     def test_decision_engine_calls_llm_when_ambiguous(self):
         with patch(
             "services.agent.decision_engine.semantic_resolver.resolve_coin_symbol",

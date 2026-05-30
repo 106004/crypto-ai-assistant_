@@ -177,7 +177,31 @@ class CoinResolverFlowTest(unittest.TestCase):
         self.assertTrue(
             any(
                 step["step"] == "gemini_candidate_judge"
-                and step.get("final_coin_source") == "rejected"
+                and step.get("final_coin_source") == "rejected_non_symbol"
+                for step in result["debug_trace"]
+            )
+        )
+
+    def test_xlm_symbol_is_accepted_by_gemini_but_marked_unsupported(self):
+        with patch(
+            "services.agent.coin_resolver_flow.classify_with_llm",
+            return_value={
+                "intent": "price_query",
+                "coin": "XLM",
+                "confidence": 0.95,
+                "reason": "recognized coin symbol",
+            },
+        ):
+            result = resolve_coin_flow("我想查某個新幣", debug=True)
+
+        self.assertEqual(result["coin"], "XLM")
+        self.assertEqual(result["status"], "unsupported")
+        self.assertEqual(result["method"], "gemini_candidate_judge")
+        self.assertTrue(
+            any(
+                step["step"] == "gemini_candidate_judge"
+                and step.get("final_coin_source") == "gemini_symbol"
+                and step.get("normalized_coin") == "XLM"
                 for step in result["debug_trace"]
             )
         )

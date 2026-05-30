@@ -35,7 +35,7 @@ def normalize_coin_symbol(raw_coin) -> str | None:
         return None
 
     upper_text = raw_text.upper()
-    if re.fullmatch(r"[A-Z]{2,5}", upper_text):
+    if re.fullmatch(r"[A-Z]{2,10}", upper_text):
         return upper_text
 
     lookup_key = _normalize_lookup_key(raw_text)

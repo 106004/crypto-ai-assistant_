@@ -197,7 +197,12 @@ def _finalize_from_gemini_candidates(
     llm_raw_coin = llm_result.get("llm_raw_coin") or coin_debug.get("llm_raw_coin")
     normalized_coin = coin_debug.get("normalized_coin")
     rejected_reason = llm_result.get("rejected_reason") or coin_debug.get("rejected_reason")
-    final_coin_source = "gemini_candidate_judge" if coin is not None else ("rejected" if llm_raw_coin else "none")
+    if coin is not None:
+        final_coin_source = "gemini_symbol"
+    elif llm_raw_coin:
+        final_coin_source = "rejected_non_symbol"
+    else:
+        final_coin_source = "none"
 
     llm_selected_candidate = _is_candidate_match(coin, candidates)
     accepted_coin = coin
