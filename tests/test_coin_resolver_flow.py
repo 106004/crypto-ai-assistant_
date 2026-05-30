@@ -148,16 +148,24 @@ class CoinResolverFlowTest(unittest.TestCase):
             )
         )
 
-    def test_weather_message_returns_not_found_without_gemini(self):
-        with patch("services.agent.coin_resolver_flow.classify_with_llm") as classify_mock:
+    def test_weather_message_still_runs_gemini_without_candidates(self):
+        with patch(
+            "services.agent.coin_resolver_flow.classify_with_llm",
+            return_value={
+                "intent": "unknown",
+                "coin": None,
+                "confidence": 0.0,
+                "reason": "no coin found",
+            },
+        ) as classify_mock:
             result = resolve_coin_flow("今天天氣很好", debug=True)
 
-        classify_mock.assert_not_called()
+        classify_mock.assert_called_once()
         self.assertEqual(result["coin"], None)
         self.assertEqual(result["status"], "not_found")
-        self.assertEqual(result["method"], "none")
-        self.assertFalse(result["llm_used"])
-        self.assertTrue(any(step["step"] == "gemini_candidate_judge" and not step["executed"] for step in result["debug_trace"]))
+        self.assertEqual(result["method"], "gemini_candidate_judge")
+        self.assertTrue(result["llm_used"])
+        self.assertTrue(any(step["step"] == "gemini_candidate_judge" and step["executed"] for step in result["debug_trace"]))
         self.assertTrue(any(step["step"] == "final_decision" for step in result["debug_trace"]))
 
 

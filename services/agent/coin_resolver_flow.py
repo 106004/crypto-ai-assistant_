@@ -352,40 +352,9 @@ def resolve_coin_flow(text: str, debug: bool = False) -> dict[str, object]:
     )
 
     gemini_candidates = _merge_candidate_lists(ticker_candidates, fuzzy_candidates)
-    if gemini_candidates:
-        llm_result = classify_with_llm(raw_text, candidates=gemini_candidates)
-        return _finalize_from_gemini_candidates(
-            llm_result=llm_result,
-            candidates=gemini_candidates,
-            debug_trace=debug_trace,
-        )
-
-    debug_trace.append(
-        _debug_step(
-            "gemini_candidate_judge",
-            False,
-            False,
-            selected_coin=None,
-            reason="no_candidates",
-            candidates=[],
-        )
-    )
-    debug_trace.append(
-        {
-            "step": "final_decision",
-            "executed": True,
-            "matched": False,
-            "source": "gemini_candidate_judge",
-            "coin": None,
-            "status": "not_found",
-        }
-    )
-    return _build_response(
-        coin=None,
-        status="not_found",
-        method="none",
-        candidates=[],
-        confidence=0.0,
-        llm_used=False,
+    llm_result = classify_with_llm(raw_text, candidates=gemini_candidates or None)
+    return _finalize_from_gemini_candidates(
+        llm_result=llm_result,
+        candidates=gemini_candidates,
         debug_trace=debug_trace,
     )
