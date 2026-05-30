@@ -237,19 +237,26 @@ class LLMIntentClassifierTest(unittest.TestCase):
         self.assertIn("BTC", str(capture["contents"]))
         self.assertIn("btcc price", str(capture["contents"]))
 
-    def test_classify_with_llm_rejects_candidate_mismatch(self):
+    def test_classify_with_llm_allows_coin_outside_candidates_when_supported(self):
         response_text = (
             '{"intent":"price_query","coin":"BTC","confidence":0.95,'
-            '"reason":"selected wrong coin"}'
+            '"reason":"user clearly meant bitcoin"}'
         )
         with patch(
             "services.agent.llm_intent_classifier.get_gemini_client",
             return_value=FakeClient(response_text),
         ):
-            result = classify_with_llm("LTC price", candidates=[{"coin": "ETH", "score": 0.84}])
+            result = classify_with_llm("我想查 bitcoin", candidates=[{"coin": "ETH", "score": 0.84}])
 
-        self.assertIn(result["intent"], {"clarification_needed", "unknown"})
-        self.assertNotEqual(result.get("coin"), "BTC")
+        self.assertEqual(
+            result,
+            {
+                "intent": "price_query",
+                "coin": "BTC",
+                "confidence": 0.95,
+                "reason": "user clearly meant bitcoin",
+            },
+        )
 
     def test_classify_with_llm_returns_unsupported_coin_for_ltc(self):
         response_text = (

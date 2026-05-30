@@ -235,7 +235,9 @@ def _build_prompt(message: str, candidates: list[dict[str, object]] | None = Non
         "Use one of these task intents: price_query, market_analysis, unsupported_coin, clarification_needed, unknown.\n"
         "If the coin is unknown, set coin to null.\n"
         "Use the original message and the candidate coins if provided.\n"
-        "If a candidate looks similar but does not fit the user's meaning, do not select it.\n"
+        "Candidate coins are hints, not hard restrictions.\n"
+        "You may select one of the candidates or choose another supported coin if the user's text clearly points to it.\n"
+        "Do not invent a coin that is not supported by the user's meaning.\n"
         "If the coin is known but unsupported, return unsupported_coin.\n"
         "\n"
         "Return this JSON schema exactly:\n"
@@ -307,22 +309,6 @@ def parse_llm_classifier_output(
     if coin not in SUPPORTED_COINS:
         return _validate_classifier_result(_build_response("unsupported_coin", coin, confidence, "coin_not_supported"))
 
-    candidate_coins = {
-        str(item.get("coin") or "").strip().upper()
-        for item in (candidates or [])
-        if str(item.get("coin") or "").strip()
-    }
-    if candidate_coins and coin not in candidate_coins:
-        return _build_response("clarification_needed", None, confidence, "candidate_mismatch")
-
-    if not candidate_coins and message:
-        message_coin_tokens = {
-            token.upper()
-            for token in re.findall(r"\b[A-Za-z]{2,4}\b", str(message))
-        }
-        if message_coin_tokens and coin not in message_coin_tokens:
-            return _build_response("clarification_needed", None, confidence, "candidate_mismatch")
-
     if intent == "unknown":
         return _build_response("unknown", None, confidence, reason)
 
@@ -383,15 +369,11 @@ def classify_with_llm(
         return result
 
     if intent == "clarification_needed":
-        print("[LLMJudge] rejected fuzzy candidate")
-        return result
-
-    if reason == "candidate_mismatch":
-        print("[LLMJudge] rejected fuzzy candidate")
+        print("[LLMJudge] requested clarification")
         return result
 
     if intent == "unknown" and reason == "low_confidence":
-        print("[LLMJudge] rejected fuzzy candidate")
+        print("[LLMJudge] rejected low confidence result")
         return result
 
     if intent in ALLOWED_INTENTS:

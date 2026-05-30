@@ -50,6 +50,30 @@ def _normalize_candidates(value: object) -> list[dict[str, Any]]:
     return normalized_candidates
 
 
+def _tag_candidates(candidates: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
+    tagged_candidates: list[dict[str, Any]] = []
+    for candidate in candidates:
+        tagged_candidate = dict(candidate)
+        tagged_candidate["source"] = source
+        tagged_candidates.append(tagged_candidate)
+    return tagged_candidates
+
+
+def _merge_candidate_lists(*candidate_lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for candidate_list in candidate_lists:
+        for candidate in candidate_list:
+            coin = str(candidate.get("coin") or "").strip().upper()
+            if not coin or coin in seen:
+                continue
+            seen.add(coin)
+            merged.append(dict(candidate))
+
+    return merged
+
+
 def _is_candidate_match(coin: str | None, candidates: list[dict[str, Any]]) -> bool:
     if not coin:
         return False
@@ -72,15 +96,16 @@ def _debug_step(step: str, executed: bool, matched: bool, **extra: object) -> di
     return entry
 
 
-def _extract_strict_ticker(message: str) -> str | None:
-    """Return a clean standalone ticker and skip mixed-case typos like BTCc."""
+def _extract_ticker_candidates(message: str) -> list[dict[str, Any]]:
+    """Return standalone ticker candidates and skip mixed-case typos like BTCc."""
 
     raw = str(message or "").strip()
     if not raw or re.search(r"\d", raw):
-        return None
+        return []
 
-    candidates = re.findall(r"(?<![A-Za-z])[A-Za-z]{3,5}(?![A-Za-z])", raw)
-    for candidate in candidates:
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in re.findall(r"(?<![A-Za-z])[A-Za-z]{3,5}(?![A-Za-z])", raw):
         ticker = candidate.strip()
         if not ticker:
             continue
@@ -88,9 +113,14 @@ def _extract_strict_ticker(message: str) -> str | None:
             continue
         if not (ticker.islower() or ticker.isupper()):
             continue
-        return ticker.upper()
 
-    return None
+        coin = ticker.upper()
+        if coin in seen:
+            continue
+        seen.add(coin)
+        candidates.append({"coin": coin, "source": "ticker_extraction"})
+
+    return candidates
 
 
 def _build_response(
@@ -152,11 +182,10 @@ def _finalize_from_coin(
     )
 
 
-def _finalize_from_llm(
+def _finalize_from_gemini_candidates(
     *,
     llm_result: dict[str, object],
     candidates: list[dict[str, Any]],
-    llm_used: bool,
     debug_trace: list[dict[str, Any]],
 ) -> dict[str, object]:
     coin = _normalize_coin_value(llm_result.get("coin"))
@@ -165,119 +194,62 @@ def _finalize_from_llm(
     intent = str(llm_result.get("intent") or "").strip().lower()
 
     llm_selected_candidate = _is_candidate_match(coin, candidates)
+    accepted_coin = coin
     debug_trace.append(
         {
-            "step": "llm_coin_understanding",
-            "executed": llm_used,
-            "matched": llm_selected_candidate,
+            "step": "gemini_candidate_judge",
+            "executed": True,
+            "matched": accepted_coin is not None,
             "coin": coin,
             "reason": reason,
             "intent": intent,
             "selected_candidate": llm_selected_candidate,
+            "accepted_coin": accepted_coin,
             "candidates": candidates,
         }
     )
 
-    if intent == "unsupported_coin" or reason == "coin_not_supported":
-        return _finalize_from_coin(
-            coin=coin,
-            method="llm_coin_understanding",
-            confidence=confidence,
-            llm_used=llm_used,
-            candidates=[],
-            debug_trace=debug_trace,
-        )
-
-    if intent == "clarification_needed" or reason in {"low_confidence", "candidate_mismatch"}:
-        return _build_response(
-            coin=None,
-            status="ambiguous" if candidates else "not_found",
-            method="llm_coin_understanding",
-            candidates=candidates,
-            confidence=confidence,
-            llm_used=llm_used,
-            debug_trace=[
-                *debug_trace,
-                {
-                    "step": "final_decision",
-                    "executed": True,
-                    "matched": False,
-                    "source": "llm_coin_understanding",
-                    "coin": None,
-                    "status": "ambiguous" if candidates else "not_found",
-                },
-            ],
-        )
-
-    if coin is not None and is_supported_coin(coin):
-        if candidates and not llm_selected_candidate:
-            return _build_response(
-                coin=None,
-                status="ambiguous",
-                method="llm_coin_understanding",
-                candidates=candidates,
-                confidence=confidence,
-                llm_used=llm_used,
-                debug_trace=[
-                    *debug_trace,
-                    {
-                        "step": "final_decision",
-                        "executed": True,
-                        "matched": False,
-                        "source": "llm_coin_understanding",
-                        "coin": None,
-                        "status": "ambiguous",
-                    },
-                ],
-            )
-        return _finalize_from_coin(
-            coin=coin,
-            method="llm_coin_understanding",
-            confidence=confidence,
-            llm_used=llm_used,
-            candidates=[] if not candidates else candidates,
-            debug_trace=debug_trace,
-        )
-
-    if candidates:
-        return _build_response(
-            coin=None,
-            status="ambiguous",
-            method="llm_coin_understanding",
-            candidates=candidates,
-            confidence=confidence,
-            llm_used=llm_used,
-            debug_trace=[
-                *debug_trace,
-                {
-                    "step": "final_decision",
-                    "executed": True,
-                    "matched": False,
-                    "source": "llm_coin_understanding",
-                    "coin": None,
-                    "status": "ambiguous",
-                },
-            ],
-        )
-
-    return _build_response(
-        coin=None,
-        status="not_found",
-        method="llm_coin_understanding",
-        candidates=[],
-        confidence=confidence,
-        llm_used=llm_used,
-        debug_trace=[
-            *debug_trace,
+    if accepted_coin is None:
+        status: Literal["supported", "unsupported", "ambiguous", "not_found", "error"] = "ambiguous" if candidates else "not_found"
+        debug_trace.append(
             {
                 "step": "final_decision",
                 "executed": True,
                 "matched": False,
-                "source": "llm_coin_understanding",
+                "source": "gemini_candidate_judge",
                 "coin": None,
-                "status": "not_found",
-            },
-        ],
+                "status": status,
+            }
+        )
+        return _build_response(
+            coin=None,
+            status=status,
+            method="gemini_candidate_judge",
+            candidates=candidates if status == "ambiguous" else [],
+            confidence=confidence,
+            llm_used=True,
+            debug_trace=debug_trace,
+        )
+
+    status = "supported" if is_supported_coin(accepted_coin) else "unsupported"
+    debug_trace.append(
+        {
+            "step": "final_decision",
+            "executed": True,
+            "matched": True,
+            "source": "gemini_candidate_judge",
+            "coin": accepted_coin,
+            "status": status,
+        }
+    )
+    return _build_response(
+        coin=accepted_coin,
+        status=status,
+        method="gemini_candidate_judge",
+        candidates=[],
+        confidence=confidence,
+        llm_used=True,
+        debug_trace=debug_trace,
     )
 
 
@@ -292,9 +264,9 @@ def resolve_coin_flow(text: str, debug: bool = False) -> dict[str, object]:
             [
                 _debug_step("exact_match", False, False),
                 _debug_step("alias_match", False, False),
-                _debug_step("ticker_extraction", False, False),
+                _debug_step("ticker_extraction", False, False, candidates=[]),
                 _debug_step("fuzzy_candidates", False, False, candidates=[]),
-                _debug_step("llm_coin_understanding", False, False, candidates=[]),
+                _debug_step("gemini_candidate_judge", False, False, selected_coin=None, reason="no_candidates", candidates=[]),
                 _debug_step("final_decision", True, False, source="none", coin=None, status="not_found"),
             ]
         )
@@ -316,9 +288,9 @@ def resolve_coin_flow(text: str, debug: bool = False) -> dict[str, object]:
             [
                 _debug_step("exact_match", True, True, coin=coin, source="semantic_resolver"),
                 _debug_step("alias_match", False, False),
-                _debug_step("ticker_extraction", False, False),
+                _debug_step("ticker_extraction", False, False, candidates=[]),
                 _debug_step("fuzzy_candidates", False, False, candidates=[]),
-                _debug_step("llm_coin_understanding", False, False, candidates=[]),
+                _debug_step("gemini_candidate_judge", False, False, selected_coin=None, reason="exact_match_short_circuit", candidates=[]),
             ]
         )
         return _finalize_from_coin(
@@ -339,9 +311,9 @@ def resolve_coin_flow(text: str, debug: bool = False) -> dict[str, object]:
         debug_trace.extend(
             [
                 _debug_step("alias_match", True, True, coin=unsupported_coin, source="unsupported_coin_service"),
-                _debug_step("ticker_extraction", False, False),
+                _debug_step("ticker_extraction", False, False, candidates=[]),
                 _debug_step("fuzzy_candidates", False, False, candidates=[]),
-                _debug_step("llm_coin_understanding", False, False, candidates=[]),
+                _debug_step("gemini_candidate_judge", False, False, selected_coin=None, reason="alias_match_short_circuit", candidates=[]),
             ]
         )
         return _finalize_from_coin(
@@ -355,53 +327,65 @@ def resolve_coin_flow(text: str, debug: bool = False) -> dict[str, object]:
 
     debug_trace.append(_debug_step("alias_match", True, False, source="unsupported_coin_service"))
 
-    ticker = _extract_strict_ticker(raw_text)
-    if ticker is not None:
-        confidence = 0.5
-        debug_trace.extend(
-            [
-                _debug_step("ticker_extraction", True, True, coin=ticker, source="strict_ticker"),
-                _debug_step("fuzzy_candidates", False, False, candidates=[]),
-                _debug_step("llm_coin_understanding", False, False, candidates=[]),
-            ]
+    ticker_candidates = _extract_ticker_candidates(raw_text)
+    debug_trace.append(
+        _debug_step(
+            "ticker_extraction",
+            True,
+            bool(ticker_candidates),
+            candidates=ticker_candidates,
+            source="strict_ticker",
         )
-        return _finalize_from_coin(
-            coin=ticker,
-            method="ticker_extraction",
-            confidence=confidence,
-            llm_used=False,
-            candidates=[],
-            debug_trace=debug_trace,
-        )
-
-    debug_trace.append(_debug_step("ticker_extraction", True, False, source="strict_ticker"))
+    )
 
     fuzzy_result = _match_fuzzy_candidates(raw_text)
     fuzzy_candidates = _normalize_candidates(fuzzy_result.get("candidates") if isinstance(fuzzy_result, dict) else [])
-    if fuzzy_candidates:
-        confidence = float(fuzzy_result.get("confidence") or 0.0) if isinstance(fuzzy_result, dict) else 0.0
-        debug_trace.append(
-            _debug_step(
-                "fuzzy_candidates",
-                True,
-                True,
-                candidates=fuzzy_candidates,
-                source="semantic_resolver",
-            )
-        )
-        llm_result = classify_with_llm(raw_text, candidates=fuzzy_candidates)
-        return _finalize_from_llm(
-            llm_result=llm_result,
+    fuzzy_candidates = _tag_candidates(fuzzy_candidates, "fuzzy")
+    debug_trace.append(
+        _debug_step(
+            "fuzzy_candidates",
+            True,
+            bool(fuzzy_candidates),
             candidates=fuzzy_candidates,
-            llm_used=True,
+            source="semantic_resolver",
+        )
+    )
+
+    gemini_candidates = _merge_candidate_lists(ticker_candidates, fuzzy_candidates)
+    if gemini_candidates:
+        llm_result = classify_with_llm(raw_text, candidates=gemini_candidates)
+        return _finalize_from_gemini_candidates(
+            llm_result=llm_result,
+            candidates=gemini_candidates,
             debug_trace=debug_trace,
         )
 
-    debug_trace.append(_debug_step("fuzzy_candidates", True, False, candidates=[], source="semantic_resolver"))
-    llm_result = classify_with_llm(raw_text, candidates=None)
-    return _finalize_from_llm(
-        llm_result=llm_result,
+    debug_trace.append(
+        _debug_step(
+            "gemini_candidate_judge",
+            False,
+            False,
+            selected_coin=None,
+            reason="no_candidates",
+            candidates=[],
+        )
+    )
+    debug_trace.append(
+        {
+            "step": "final_decision",
+            "executed": True,
+            "matched": False,
+            "source": "gemini_candidate_judge",
+            "coin": None,
+            "status": "not_found",
+        }
+    )
+    return _build_response(
+        coin=None,
+        status="not_found",
+        method="none",
         candidates=[],
-        llm_used=True,
+        confidence=0.0,
+        llm_used=False,
         debug_trace=debug_trace,
     )

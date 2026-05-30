@@ -6,17 +6,95 @@ from services.agent.coin_resolver_flow import resolve_coin_flow
 
 
 class CoinResolverFlowTest(unittest.TestCase):
-    def test_exact_match_does_not_use_llm(self):
-        result = resolve_coin_flow("我想查比特幣", debug=True)
+    def test_exact_match_does_not_use_gemini(self):
+        result = resolve_coin_flow("BTC", debug=True)
 
         self.assertEqual(result["coin"], "BTC")
         self.assertEqual(result["status"], "supported")
+        self.assertEqual(result["method"], "exact_match")
         self.assertFalse(result["llm_used"])
-        self.assertTrue(any(step["step"] == "exact_match" for step in result["debug_trace"]))
-        self.assertFalse(any(step["step"] == "llm_coin_understanding" and step["executed"] for step in result["debug_trace"]))
+        self.assertTrue(any(step["step"] == "exact_match" and step["matched"] for step in result["debug_trace"]))
+        self.assertFalse(any(step["step"] == "gemini_candidate_judge" and step["executed"] for step in result["debug_trace"]))
 
-    def test_fuzzy_candidate_can_be_selected_by_llm(self):
+    def test_link_uses_ticker_candidate_and_gemini_cannot_override(self):
         with patch(
+            "services.agent.coin_resolver_flow.classify_with_llm",
+            return_value={
+                "intent": "price_query",
+                "coin": "LINK",
+                "confidence": 0.91,
+                "reason": "selected from candidates",
+            },
+        ) as classify_mock:
+            result = resolve_coin_flow("我想查 LINK", debug=True)
+
+        classify_mock.assert_called_once()
+        self.assertTrue(result["llm_used"])
+        self.assertEqual(result["coin"], "LINK")
+        self.assertEqual(result["status"], "unsupported")
+        self.assertEqual(result["method"], "gemini_candidate_judge")
+        self.assertTrue(
+            any(
+                step["step"] == "ticker_extraction"
+                and step["executed"]
+                and step["matched"]
+                and step["candidates"] == [{"coin": "LINK", "source": "ticker_extraction"}]
+                for step in result["debug_trace"]
+            )
+        )
+        self.assertTrue(
+            any(
+                step["step"] == "gemini_candidate_judge"
+                and step["executed"]
+                and step["matched"]
+                and step["accepted_coin"] == "LINK"
+                for step in result["debug_trace"]
+            )
+        )
+
+        _, kwargs = classify_mock.call_args
+        self.assertEqual(kwargs["candidates"], [{"coin": "LINK", "source": "ticker_extraction"}])
+
+    def test_ltc_uses_ticker_candidate_and_gemini_cannot_override(self):
+        with patch(
+            "services.agent.coin_resolver_flow.classify_with_llm",
+            return_value={
+                "intent": "price_query",
+                "coin": "LTC",
+                "confidence": 0.91,
+                "reason": "selected from candidates",
+            },
+        ) as classify_mock:
+            result = resolve_coin_flow("我想查 LTC", debug=True)
+
+        classify_mock.assert_called_once()
+        self.assertTrue(result["llm_used"])
+        self.assertEqual(result["coin"], "LTC")
+        self.assertEqual(result["status"], "unsupported")
+        self.assertEqual(result["method"], "gemini_candidate_judge")
+        self.assertTrue(
+            any(
+                step["step"] == "ticker_extraction"
+                and step["executed"]
+                and step["matched"]
+                and step["candidates"] == [{"coin": "LTC", "source": "ticker_extraction"}]
+                for step in result["debug_trace"]
+            )
+        )
+
+        _, kwargs = classify_mock.call_args
+        self.assertEqual(kwargs["candidates"], [{"coin": "LTC", "source": "ticker_extraction"}])
+
+    def test_btcc_generates_fuzzy_candidates_and_keeps_trace(self):
+        with patch(
+            "services.agent.coin_resolver_flow._match_fuzzy_candidates",
+            return_value={
+                "coin": None,
+                "confidence": 0.0,
+                "method": "fuzzy_candidates",
+                "candidates": [{"coin": "BTC", "score": 0.943}],
+            },
+        ), patch(
             "services.agent.coin_resolver_flow.classify_with_llm",
             return_value={
                 "intent": "price_query",
@@ -24,55 +102,62 @@ class CoinResolverFlowTest(unittest.TestCase):
                 "confidence": 0.91,
                 "reason": "selected from candidates",
             },
-        ) as classify_mock:
+        ):
             result = resolve_coin_flow("我想查 BTCc", debug=True)
 
-        classify_mock.assert_called()
-        self.assertTrue(result["llm_used"])
         self.assertEqual(result["coin"], "BTC")
-        self.assertEqual(result["status"], "supported")
-        self.assertTrue(any(step["step"] == "fuzzy_candidates" and step["executed"] for step in result["debug_trace"]))
-        self.assertTrue(any(step["step"] == "llm_coin_understanding" and step["executed"] for step in result["debug_trace"]))
-        self.assertTrue(any(step["step"] == "final_decision" and step["source"] for step in result["debug_trace"]))
+        self.assertIn(result["status"], {"supported", "ambiguous"})
+        self.assertTrue(any(step["step"] == "fuzzy_candidates" and step["executed"] and step["matched"] for step in result["debug_trace"]))
+        self.assertTrue(any(step["step"] == "gemini_candidate_judge" and step["executed"] for step in result["debug_trace"]))
+        self.assertTrue(
+            any(
+                step["step"] == "fuzzy_candidates"
+                and step["candidates"] == [{"coin": "BTC", "score": 0.943, "source": "fuzzy"}]
+                for step in result["debug_trace"]
+            )
+        )
 
-    def test_ticker_extraction_still_works_without_llm(self):
-        result = resolve_coin_flow("我想查 LINK", debug=True)
-
-        self.assertEqual(result["coin"], "LINK")
-        self.assertEqual(result["status"], "unsupported")
-        self.assertFalse(result["llm_used"])
-        self.assertTrue(any(step["step"] == "ticker_extraction" and step["matched"] for step in result["debug_trace"]))
-
-    def test_typo_message_can_fall_back_to_llm_or_not_found(self):
+    def test_chinese_typo_can_still_be_judged_by_gemini(self):
         with patch(
-            "services.agent.coin_resolver_flow.classify_with_llm",
+            "services.agent.coin_resolver_flow._match_fuzzy_candidates",
             return_value={
-                "intent": "unknown",
                 "coin": None,
                 "confidence": 0.0,
-                "reason": "low_confidence",
+                "method": "fuzzy_candidates",
+                "candidates": [{"coin": "BTC", "score": 0.91}],
             },
-        ) as classify_mock:
+        ), patch(
+            "services.agent.coin_resolver_flow.classify_with_llm",
+            return_value={
+                "intent": "price_query",
+                "coin": "BTC",
+                "confidence": 0.87,
+                "reason": "selected from candidates",
+            },
+        ):
             result = resolve_coin_flow("我想查比持幣", debug=True)
 
-        classify_mock.assert_called()
-        self.assertIn(result["status"], {"ambiguous", "not_found", "unsupported", "supported"})
-        self.assertTrue(any(step["step"] == "llm_coin_understanding" and step["executed"] for step in result["debug_trace"]))
+        self.assertEqual(result["coin"], "BTC")
+        self.assertIn(result["status"], {"supported", "ambiguous"})
+        self.assertTrue(any(step["step"] == "gemini_candidate_judge" and step["executed"] for step in result["debug_trace"]))
+        self.assertTrue(
+            any(
+                step["step"] == "fuzzy_candidates"
+                and step["candidates"] == [{"coin": "BTC", "score": 0.91, "source": "fuzzy"}]
+                for step in result["debug_trace"]
+            )
+        )
 
-    def test_weather_message_returns_not_found(self):
-        with patch(
-            "services.agent.coin_resolver_flow.classify_with_llm",
-            return_value={
-                "intent": "unknown",
-                "coin": None,
-                "confidence": 0.0,
-                "reason": "low_confidence",
-            },
-        ) as classify_mock:
+    def test_weather_message_returns_not_found_without_gemini(self):
+        with patch("services.agent.coin_resolver_flow.classify_with_llm") as classify_mock:
             result = resolve_coin_flow("今天天氣很好", debug=True)
 
-        self.assertTrue(classify_mock.called)
+        classify_mock.assert_not_called()
+        self.assertEqual(result["coin"], None)
         self.assertEqual(result["status"], "not_found")
+        self.assertEqual(result["method"], "none")
+        self.assertFalse(result["llm_used"])
+        self.assertTrue(any(step["step"] == "gemini_candidate_judge" and not step["executed"] for step in result["debug_trace"]))
         self.assertTrue(any(step["step"] == "final_decision" for step in result["debug_trace"]))
 
 
@@ -89,9 +174,9 @@ class ResolveCoinEndpointFlowTest(unittest.TestCase):
                 "debug_trace": [],
             }
 
-            response = resolve_coin_api(ResolveCoinRequest(text="我想查比特幣"))
+            response = resolve_coin_api(ResolveCoinRequest(text="BTC"))
 
-        helper_mock.assert_called_once_with("我想查比特幣", debug=False)
+        helper_mock.assert_called_once_with("BTC", debug=False)
         self.assertEqual(response["coin"], "BTC")
 
 
