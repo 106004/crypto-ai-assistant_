@@ -237,6 +237,7 @@ class LLMIntentClassifierTest(unittest.TestCase):
         self.assertIn("BTC", str(capture["contents"]))
         self.assertIn("btcc price", str(capture["contents"]))
         self.assertIn("only output standard english ticker symbol or null", str(capture["contents"]).lower())
+        self.assertIn("注意中文錯字，給你一個例子，比持幣你要能辨別它是btc", str(capture["contents"]))
 
     def test_parse_llm_classifier_output_rejects_raw_chinese_coin(self):
         result = parse_llm_classifier_output(

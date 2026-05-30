@@ -233,6 +233,7 @@ def _build_prompt(message: str, candidates: list[dict[str, object]] | None = Non
         "Never output Chinese coin names, typos, full sentences, or explanations.\n"
         "Use the original message and the candidate coins if provided.\n"
         "Candidate coins are hints, not hard restrictions.\n"
+        "注意中文錯字，給你一個例子，比持幣你要能辨別它是btc。\n"
         "You may select one of the candidates or choose another coin if the user's text clearly points to it.\n"
         "Do not invent a coin that is not supported by the user's meaning.\n"
         "If the coin is known but unsupported, return unsupported_coin.\n"
