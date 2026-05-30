@@ -8,8 +8,7 @@ from typing import Any
 
 from config.settings import GEMINI_MODEL
 from gemini_client import get_gemini_client
-from services.agent.coin_validator import validate_coin_task
-from services.agent.coin_validator import SUPPORTED_COINS
+from services.agent.coin_validator import SUPPORTED_COINS, normalize_llm_coin, validate_coin_task
 
 
 ALLOWED_INTENTS = {
@@ -73,13 +72,8 @@ def _normalize_intent(raw_intent: Any) -> str:
 
 
 def _normalize_coin(raw_coin: Any) -> str | None:
-    if raw_coin is None:
-        return None
-
-    coin = str(raw_coin).strip().upper()
-    if coin in {"", "NULL", "NONE"}:
-        return None
-    return coin
+    normalized = normalize_llm_coin(raw_coin)
+    return str(normalized.get("normalized_coin") or "").strip().upper() or None
 
 
 def _normalize_task_intent(raw_intent: Any) -> str:
@@ -254,6 +248,8 @@ def parse_llm_classifier_output(
     raw_text: str,
     message: str | None = None,
     candidates: list[dict[str, object]] | None = None,
+    *,
+    return_debug: bool = False,
 ) -> dict[str, object]:
     """Parse and validate a Gemini classifier payload."""
 
@@ -290,37 +286,100 @@ def parse_llm_classifier_output(
     if confidence_error is not None or confidence is None:
         return _build_unknown(confidence_error or "missing_confidence")
 
-    coin = _normalize_coin(raw_coin)
+    coin_debug = normalize_llm_coin(raw_coin)
+    coin = str(coin_debug.get("normalized_coin") or "").strip().upper() or None
+    rejected_reason = str(coin_debug.get("rejected_reason") or "").strip() or None
+    raw_coin_text = str(coin_debug.get("llm_raw_coin") or "").strip() or None
     if confidence < CONFIDENCE_THRESHOLD:
-        return _build_response(
+        response = _build_response(
             "clarification_needed",
             coin if coin is not None else None,
             confidence,
             "low_confidence",
         )
+        if return_debug:
+            response.update(
+                {
+                    "llm_raw_coin": raw_coin_text,
+                    "normalized_coin": coin,
+                    "rejected_reason": rejected_reason,
+                }
+            )
+        return response
 
     if coin is None:
         if intent in NULL_COIN_ALLOWED_INTENTS:
             if intent == "unknown":
-                return _build_response("unknown", None, confidence, reason)
-            return _build_response(intent, None, confidence, reason)
-        return _build_unknown("coin_unrecognized")
+                response = _build_response("unknown", None, confidence, reason)
+            else:
+                response = _build_response(intent, None, confidence, reason)
+        elif rejected_reason == "missing_coin":
+            response = _build_unknown("coin_unrecognized")
+        else:
+            response = _build_response("clarification_needed", None, confidence, rejected_reason or "coin_unrecognized")
+        if return_debug:
+            response.update(
+                {
+                    "llm_raw_coin": raw_coin_text,
+                    "normalized_coin": coin,
+                    "rejected_reason": rejected_reason,
+                }
+            )
+        return response
 
     if coin not in SUPPORTED_COINS:
-        return _validate_classifier_result(_build_response("unsupported_coin", coin, confidence, "coin_not_supported"))
+        response = _validate_classifier_result(_build_response("unsupported_coin", coin, confidence, "coin_not_supported"))
+        if return_debug:
+            response.update(
+                {
+                    "llm_raw_coin": raw_coin_text,
+                    "normalized_coin": coin,
+                    "rejected_reason": rejected_reason,
+                }
+            )
+        return response
 
     if intent == "unknown":
-        return _build_response("unknown", None, confidence, reason)
+        response = _build_response("unknown", None, confidence, reason)
+        if return_debug:
+            response.update(
+                {
+                    "llm_raw_coin": raw_coin_text,
+                    "normalized_coin": coin,
+                    "rejected_reason": rejected_reason,
+                }
+            )
+        return response
 
     if intent in {"help", "get_favorite_coin"}:
-        return _build_response(intent, None, confidence, reason)
+        response = _build_response(intent, None, confidence, reason)
+        if return_debug:
+            response.update(
+                {
+                    "llm_raw_coin": raw_coin_text,
+                    "normalized_coin": coin,
+                    "rejected_reason": rejected_reason,
+                }
+            )
+        return response
 
-    return _build_response(intent, coin, confidence, reason)
+    response = _build_response(intent, coin, confidence, reason)
+    if return_debug:
+        response.update(
+            {
+                "llm_raw_coin": raw_coin_text,
+                "normalized_coin": coin,
+                "rejected_reason": rejected_reason,
+            }
+        )
+    return response
 
 
 def classify_with_llm(
     message: str,
     candidates: list[dict[str, object]] | None = None,
+    *,
+    return_debug: bool = False,
 ) -> dict[str, object]:
     """Classify intent and coin using Gemini when rule-based signals are ambiguous."""
 
@@ -343,7 +402,7 @@ def classify_with_llm(
         print("[LLMClassifier] unavailable or failed")
         return _build_unknown("llm_error")
 
-    result = parse_llm_classifier_output(raw_output, message=message, candidates=candidates)
+    result = parse_llm_classifier_output(raw_output, message=message, candidates=candidates, return_debug=return_debug)
     reason = str(result.get("reason") or "").strip().lower()
     intent = str(result.get("intent") or "").strip().lower()
 

@@ -117,7 +117,7 @@ class CoinResolverFlowTest(unittest.TestCase):
             )
         )
 
-    def test_chinese_typo_can_still_be_judged_by_gemini(self):
+    def test_chinese_typo_never_returns_raw_text_as_coin(self):
         with patch(
             "services.agent.coin_resolver_flow._match_fuzzy_candidates",
             return_value={
@@ -137,8 +137,9 @@ class CoinResolverFlowTest(unittest.TestCase):
         ):
             result = resolve_coin_flow("我想查比持幣", debug=True)
 
-        self.assertEqual(result["coin"], "BTC")
-        self.assertIn(result["status"], {"supported", "ambiguous"})
+        self.assertNotEqual(result["coin"], "比持幣")
+        self.assertIn(result["coin"], {None, "BTC"})
+        self.assertIn(result["status"], {"supported", "ambiguous", "not_found"})
         self.assertTrue(any(step["step"] == "gemini_candidate_judge" and step["executed"] for step in result["debug_trace"]))
         self.assertTrue(
             any(
@@ -147,6 +148,38 @@ class CoinResolverFlowTest(unittest.TestCase):
                 for step in result["debug_trace"]
             )
         )
+        self.assertTrue(
+            any(
+                step["step"] == "gemini_candidate_judge"
+                and step.get("rejected_reason") in {None, "non_symbol_raw_text"}
+                for step in result["debug_trace"]
+            )
+        )
+
+    def test_trump_message_can_return_unsupported_but_not_btc(self):
+        result = resolve_coin_flow("我想查川普幣", debug=True)
+
+        self.assertEqual(result["coin"], "TRUMP")
+        self.assertEqual(result["status"], "unsupported")
+        self.assertNotEqual(result["coin"], "BTC")
+        self.assertTrue(any(step["step"] == "alias_match" and step["matched"] for step in result["debug_trace"]))
+        self.assertFalse(any(step["step"] == "gemini_candidate_judge" and step["executed"] for step in result["debug_trace"]))
+
+    def test_nonexistent_coin_message_does_not_become_entire_sentence(self):
+        with patch(
+            "services.agent.coin_resolver_flow.classify_with_llm",
+            return_value={
+                "intent": "clarification_needed",
+                "coin": None,
+                "confidence": 0.0,
+                "reason": "non_symbol_raw_text",
+            },
+        ):
+            result = resolve_coin_flow("我想查一個完全不存在的幣", debug=True)
+
+        self.assertIsNone(result["coin"])
+        self.assertIn(result["status"], {"not_found", "ambiguous"})
+        self.assertNotEqual(result["coin"], "我想查一個完全不存在的幣")
 
     def test_weather_message_still_runs_gemini_without_candidates(self):
         with patch(

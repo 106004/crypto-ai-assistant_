@@ -237,6 +237,38 @@ class LLMIntentClassifierTest(unittest.TestCase):
         self.assertIn("BTC", str(capture["contents"]))
         self.assertIn("btcc price", str(capture["contents"]))
 
+    def test_parse_llm_classifier_output_rejects_raw_chinese_coin(self):
+        result = parse_llm_classifier_output(
+            '{"intent":"price_query","coin":"比持幣","confidence":0.95,"reason":"raw text"}'
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "intent": "clarification_needed",
+                "coin": None,
+                "confidence": 0.95,
+                "reason": "non_symbol_raw_text",
+            },
+        )
+
+    def test_classify_with_llm_debug_fields_show_normalized_coin_and_rejection(self):
+        response_text = (
+            '{"intent":"price_query","coin":"比持幣","confidence":0.95,'
+            '"reason":"raw text"}'
+        )
+        with patch(
+            "services.agent.llm_intent_classifier.get_gemini_client",
+            return_value=FakeClient(response_text),
+        ):
+            result = classify_with_llm("我想查比持幣", return_debug=True)
+
+        self.assertEqual(result["intent"], "clarification_needed")
+        self.assertIsNone(result["coin"])
+        self.assertEqual(result["llm_raw_coin"], "比持幣")
+        self.assertIsNone(result["normalized_coin"])
+        self.assertEqual(result["rejected_reason"], "non_symbol_raw_text")
+
     def test_classify_with_llm_allows_coin_outside_candidates_when_supported(self):
         response_text = (
             '{"intent":"price_query","coin":"BTC","confidence":0.95,'

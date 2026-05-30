@@ -192,6 +192,9 @@ def _finalize_from_gemini_candidates(
     confidence = float(llm_result.get("confidence") or 0.0)
     reason = str(llm_result.get("reason") or "").strip().lower()
     intent = str(llm_result.get("intent") or "").strip().lower()
+    llm_raw_coin = llm_result.get("llm_raw_coin")
+    normalized_coin = llm_result.get("normalized_coin")
+    rejected_reason = llm_result.get("rejected_reason")
 
     llm_selected_candidate = _is_candidate_match(coin, candidates)
     accepted_coin = coin
@@ -201,6 +204,9 @@ def _finalize_from_gemini_candidates(
             "executed": True,
             "matched": accepted_coin is not None,
             "coin": coin,
+            "llm_raw_coin": llm_raw_coin,
+            "normalized_coin": normalized_coin,
+            "rejected_reason": rejected_reason,
             "reason": reason,
             "intent": intent,
             "selected_candidate": llm_selected_candidate,
@@ -352,7 +358,7 @@ def resolve_coin_flow(text: str, debug: bool = False) -> dict[str, object]:
     )
 
     gemini_candidates = _merge_candidate_lists(ticker_candidates, fuzzy_candidates)
-    llm_result = classify_with_llm(raw_text, candidates=gemini_candidates or None)
+    llm_result = classify_with_llm(raw_text, candidates=gemini_candidates or None, return_debug=True)
     return _finalize_from_gemini_candidates(
         llm_result=llm_result,
         candidates=gemini_candidates,
