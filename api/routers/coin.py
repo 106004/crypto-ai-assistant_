@@ -351,7 +351,7 @@ def resolve_coin_with_full_decision_flow(text: str, debug: bool = False) -> dict
     )
 
 
-@router.post("/resolve-coin", response_model=ResolveCoinResponse)
+@router.post("/resolve-coin", response_model=ResolveCoinResponse, name="resolve_coin")
 def resolve_coin_api(request: ResolveCoinRequest) -> dict[str, object]:
     try:
         response = resolve_coin_flow(request.text, debug=False)
@@ -369,4 +369,3 @@ def resolve_coin_api(request: ResolveCoinRequest) -> dict[str, object]:
         }
         response.update(_gemini_debug_status())
         return response
-

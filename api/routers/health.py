@@ -8,7 +8,7 @@ from fastapi import APIRouter
 router = APIRouter()
 
 
-@router.get("/health")
+@router.get("/health", name="health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
@@ -16,4 +16,3 @@ def health_check() -> dict[str, str]:
 @router.get("/")
 def root_health_check() -> dict[str, str]:
     return {"status": "ok"}
-
