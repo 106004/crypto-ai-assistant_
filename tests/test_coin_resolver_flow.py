@@ -1,7 +1,8 @@
 import unittest
 from unittest.mock import patch
 
-from api_server import ResolveCoinRequest, resolve_coin_api
+from api.routers.coin import resolve_coin_api
+from api.schemas.coin import ResolveCoinRequest
 from services.agent.coin_resolver_flow import resolve_coin_flow
 
 
@@ -261,7 +262,7 @@ class CoinResolverFlowTest(unittest.TestCase):
 
 class ResolveCoinEndpointFlowTest(unittest.TestCase):
     def test_endpoint_uses_resolve_coin_flow(self):
-        with patch("api_server.resolve_coin_flow") as helper_mock:
+        with patch("api.routers.coin.resolve_coin_flow") as helper_mock:
             helper_mock.return_value = {
                 "coin": "BTC",
                 "status": "supported",
