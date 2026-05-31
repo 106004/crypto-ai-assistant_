@@ -1,10 +1,14 @@
 import unittest
 from unittest.mock import patch
 
-from api_server import ResolveCoinRequest, resolve_coin_api
+from api_server import app, health_endpoint, ResolveCoinRequest, resolve_coin_api
 
 
 class ApiServerEndpointTest(unittest.TestCase):
+    def test_health_endpoint(self):
+        self.assertTrue(any(getattr(route, "path", None) == "/health" for route in app.routes))
+        self.assertEqual(health_endpoint(), {"status": "ok"})
+
     def test_endpoint_uses_resolve_coin_flow(self):
         with patch("api_server.resolve_coin_flow") as helper_mock:
             helper_mock.return_value = {

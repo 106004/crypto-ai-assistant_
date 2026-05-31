@@ -372,6 +372,11 @@ def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/health")
+def health_endpoint() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @app.post("/resolve-coin", response_model=ResolveCoinResponse)
 def resolve_coin_api(request: ResolveCoinRequest) -> dict[str, object]:
     try:
