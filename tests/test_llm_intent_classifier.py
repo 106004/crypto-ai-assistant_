@@ -236,7 +236,10 @@ class LLMIntentClassifierTest(unittest.TestCase):
         self.assertEqual(result["coin"], "BTC")
         self.assertIn("BTC", str(capture["contents"]))
         self.assertIn("btcc price", str(capture["contents"]))
-        self.assertIn("only output standard english ticker symbol or null", str(capture["contents"]).lower())
+        prompt_text = str(capture["contents"]).lower()
+        self.assertIn("english typo", prompt_text)
+        self.assertIn("real cryptocurrency that actually exists in the world", prompt_text)
+        self.assertIn("only output a standard english ticker symbol", prompt_text)
         self.assertIn("注意中文錯字，給你一個例子，比持幣你要能辨別它是btc", str(capture["contents"]))
 
     def test_parse_llm_classifier_output_rejects_raw_chinese_coin(self):
